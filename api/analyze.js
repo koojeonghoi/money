@@ -30,7 +30,7 @@ export default async function handler(req, res) {
 - category는 반드시 주어진 목록 중 가장 알맞은 것 하나를 그대로 적어. 애매하면 "미분류".
 - 텍스트를 읽을 수 없는 이미지면 빈 배열 []을 출력해.`;
 
-  const model = "gemini-2.5-flash";
+  const model = "gemini-3.6-flash";
 
   try {
     const response = await fetch(
