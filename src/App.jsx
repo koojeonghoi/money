@@ -232,7 +232,6 @@ export default function App() {
         @keyframes spin { to { transform: rotate(360deg); } }
         .ledger-serif { font-family: 'Noto Serif KR','Nanum Myeongjo',serif; }
         .tabular { font-variant-numeric: tabular-nums; font-family: 'Roboto Mono','SF Mono',monospace; }
-        .paper-lines { background-image: repeating-linear-gradient(to bottom, transparent, transparent 43px, #2A3B57 44px); }
         .stamp-chip:nth-child(odd) { transform: rotate(-0.6deg); }
         .stamp-chip:nth-child(even) { transform: rotate(0.6deg); }
         input, select { color-scheme: dark; }
@@ -436,44 +435,51 @@ export default function App() {
                 아직 내역이 없어요. 왼쪽에 캡처 이미지를 붙여넣어 시작하세요.
               </div>
             ) : (
-              <div className="paper-lines pb-2">
+              <div className="pb-1">
                 {transactions.map((t) => {
                   const cat = catMap[t.categoryId];
                   return (
-                    <div key={t.id} className="flex items-center gap-2 px-4" style={{ height: 44 }}>
+                    <div key={t.id} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b" }}>
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={t.description}
+                          onChange={(e) => updateTx(t.id, { description: e.target.value })}
+                          className="flex-1 min-w-0 bg-transparent outline-none text-sm truncate"
+                          style={{ color: "#EDE6D3" }}
+                        />
+                        <select
+                          value={t.categoryId}
+                          onChange={(e) => updateTx(t.id, { categoryId: e.target.value })}
+                          className="text-xs rounded-md px-1 py-1 outline-none flex-shrink-0 w-[92px]"
+                          style={{ background: "#101B2D", border: `1px solid ${cat?.color || "#2A3B57"}`, color: cat?.color || "#EDE6D3" }}
+                        >
+                          {categories.map((c) => (
+                            <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={Number(t.amount || 0).toLocaleString("ko-KR")}
+                          onChange={(e) => {
+                            const digitsOnly = e.target.value.replace(/[^0-9-]/g, "");
+                            const num = digitsOnly === "" || digitsOnly === "-" ? 0 : Number(digitsOnly);
+                            updateTx(t.id, { amount: num });
+                          }}
+                          className="tabular w-20 flex-shrink-0 bg-transparent outline-none text-sm text-right font-semibold"
+                          style={{ color: t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
+                        />
+                        <button onClick={() => deleteTx(t.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                       <input
                         value={t.date}
                         onChange={(e) => updateTx(t.id, { date: e.target.value })}
-                        className="tabular w-16 flex-shrink-0 bg-transparent outline-none text-xs"
-                        style={{ color: "#93A0B8" }}
-                        placeholder="날짜"
+                        placeholder="날짜 입력"
+                        className="tabular bg-transparent outline-none text-xs w-full"
+                        style={{ color: "#5A6478" }}
                       />
-                      <input
-                        value={t.description}
-                        onChange={(e) => updateTx(t.id, { description: e.target.value })}
-                        className="flex-1 min-w-0 bg-transparent outline-none text-sm truncate"
-                        style={{ color: "#EDE6D3" }}
-                      />
-                      <select
-                        value={t.categoryId}
-                        onChange={(e) => updateTx(t.id, { categoryId: e.target.value })}
-                        className="text-xs rounded-md px-1 py-1 outline-none flex-shrink-0 w-24"
-                        style={{ background: "#101B2D", border: `1px solid ${cat?.color || "#2A3B57"}`, color: cat?.color || "#EDE6D3" }}
-                      >
-                        {categories.map((c) => (
-                          <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        value={t.amount}
-                        onChange={(e) => updateTx(t.id, { amount: e.target.value })}
-                        className="tabular w-24 flex-shrink-0 bg-transparent outline-none text-sm text-right font-semibold"
-                        style={{ color: t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
-                      />
-                      <button onClick={() => deleteTx(t.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
-                        <Trash2 size={14} />
-                      </button>
                     </div>
                   );
                 })}
