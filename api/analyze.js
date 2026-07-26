@@ -10,15 +10,15 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: "서버에 ANTHROPIC_API_KEY 환경변수가 설정되어 있지 않습니다." });
+    res.status(500).json({ error: "서버에 GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다." });
     return;
   }
 
   const prompt = `다음은 카드 사용 내역 또는 가계부 캡처 이미지야. 이미지에서 보이는 모든 거래 내역을 읽어줘.
 
-오직 아래 형식의 순수 JSON 배열만 출력해. 설명, 마크다운 코드블록(백틱) 없이 JSON 배열만.
+오직 아래 형식의 순수 JSON 배열만 출력해. 설명이나 다른 텍스트 없이 JSON 배열만.
 
 [
   {"date": "이미지에 보이는 날짜 그대로 (없으면 빈 문자열)", "description": "가맹점명 또는 내역명", "amount": 정수(원 단위, 쉼표/원 기호 제외), "category": "다음 중 하나: ${categories.join(", ")}"}
@@ -30,43 +30,47 @@ export default async function handler(req, res) {
 - category는 반드시 주어진 목록 중 가장 알맞은 것 하나를 그대로 적어. 애매하면 "미분류".
 - 텍스트를 읽을 수 없는 이미지면 빈 배열 []을 출력해.`;
 
+  const model = "gemini-2.5-flash";
+
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1500,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: mediaType || "image/png", data: image } },
-              { type: "text", text: prompt }
-            ]
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { inline_data: { mime_type: mediaType || "image/png", data: image } },
+                { text: prompt }
+              ]
+            }
+          ],
+          generationConfig: {
+            response_mime_type: "application/json"
           }
-        ]
-      })
-    });
+        })
+      }
+    );
 
     if (!response.ok) {
       const errText = await response.text();
-      res.status(502).json({ error: `Anthropic API 오류: ${errText}` });
+      res.status(502).json({ error: `Gemini API 오류: ${errText}` });
       return;
     }
 
     const data = await response.json();
-    const textBlock = (data.content || []).find((b) => b.type === "text");
-    if (!textBlock) {
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
       res.status(502).json({ error: "응답에서 텍스트를 찾지 못했습니다." });
       return;
     }
 
-    const cleaned = textBlock.text.replace(/```json|```/g, "").trim();
+    const cleaned = text.replace(/```json|```/g, "").trim();
     let parsed;
     try {
       parsed = JSON.parse(cleaned);
