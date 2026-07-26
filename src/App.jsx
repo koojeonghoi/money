@@ -68,17 +68,54 @@ function labelWithEmoji(item) {
   return item?.emoji ? `${item.emoji} ${item.name}` : item?.name || "";
 }
 
-function fileToBase64(file) {
+function loadImageEl(file) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      const base64 = result.split(",")[1];
-      resolve({ base64, mediaType: file.type || "image/png" });
-    };
-    reader.onerror = () => reject(new Error("이미지를 읽는 데 실패했습니다."));
-    reader.readAsDataURL(file);
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("이미지를 불러오지 못했습니다."));
+    img.src = URL.createObjectURL(file);
   });
+}
+
+// Long stitched screenshots (e.g. a whole month in one tall image) can be huge —
+// downscale + re-encode as JPEG before upload so we stay under the server's request-size limit.
+const MAX_IMAGE_DIMENSION = 3000;
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+async function prepareImageForUpload(file) {
+  const img = await loadImageEl(file);
+  let { naturalWidth: width, naturalHeight: height } = img;
+  const longestSide = Math.max(width, height);
+  if (longestSide > MAX_IMAGE_DIMENSION) {
+    const scale = MAX_IMAGE_DIMENSION / longestSide;
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, width, height);
+  URL.revokeObjectURL(img.src);
+
+  // JPEG compresses text-heavy screenshots far better than PNG while staying readable for analysis.
+  let quality = 0.85;
+  let dataUrl = canvas.toDataURL("image/jpeg", quality);
+  let base64 = dataUrl.split(",")[1];
+
+  // If still too large, step quality down a couple more times before giving up.
+  while (base64.length * 0.75 > MAX_UPLOAD_BYTES && quality > 0.5) {
+    quality -= 0.15;
+    dataUrl = canvas.toDataURL("image/jpeg", quality);
+    base64 = dataUrl.split(",")[1];
+  }
+
+  if (base64.length * 0.75 > MAX_UPLOAD_BYTES) {
+    throw new Error("이미지 용량이 너무 커요. 한 달치를 한 장에 담지 말고 1~2주 단위로 나눠서 캡처해 주세요.");
+  }
+
+  return { base64, mediaType: "image/jpeg" };
 }
 
 async function extractTransactions(base64, mediaType, categoryNames, paymentMethodNames, merchantHints) {
@@ -88,7 +125,16 @@ async function extractTransactions(base64, mediaType, categoryNames, paymentMeth
     body: JSON.stringify({ image: base64, mediaType, categories: categoryNames, paymentMethods: paymentMethodNames, merchantHints })
   });
 
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    throw new Error(
+      response.ok
+        ? "서버 응답을 해석하지 못했습니다."
+        : "이미지 용량이 너무 커서 서버가 요청을 처리하지 못했어요. 이미지를 더 작게 나눠서 다시 시도해 주세요."
+    );
+  }
   if (!response.ok) throw new Error(data.error || `요청 실패 (${response.status})`);
   if (!Array.isArray(data.transactions)) throw new Error("예상한 응답 형식이 아닙니다.");
   return data.transactions;
@@ -204,7 +250,7 @@ export default function App() {
     setError("");
     setLoading(true);
     try {
-      const { base64, mediaType } = await fileToBase64(file);
+      const { base64, mediaType } = await prepareImageForUpload(file);
       const categoryNames = categories.map((c) => c.name);
       const paymentMethodNames = paymentMethods.map((p) => p.name);
       const merchantHints = Object.entries(categoryMemory)
