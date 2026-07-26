@@ -57,7 +57,8 @@ export default async function handler(req, res) {
             }
           ],
           generationConfig: {
-            response_mime_type: "application/json"
+            response_mime_type: "application/json",
+            maxOutputTokens: 8192
           }
         })
       }
