@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import {
   Upload, X, Plus, RotateCcw, Loader2, ImagePlus, Trash2, PiggyBank,
-  Home, Receipt, Wallet, Settings as SettingsIcon
+  Home, Receipt, Wallet, Settings as SettingsIcon, ChevronUp, ChevronDown
 } from "lucide-react";
 
 const PALETTE = [
@@ -50,6 +50,14 @@ const NAV_ITEMS = [
   { id: "assets", label: "자산", icon: Wallet },
   { id: "settings", label: "설정", icon: SettingsIcon }
 ];
+
+function reorder(list, index, direction) {
+  const newIndex = index + direction;
+  if (newIndex < 0 || newIndex >= list.length) return list;
+  const next = [...list];
+  [next[index], next[newIndex]] = [next[newIndex], next[index]];
+  return next;
+}
 
 function uid() {
   return crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -445,8 +453,6 @@ export default function App() {
         @keyframes spin { to { transform: rotate(360deg); } }
         .ledger-serif { font-family: 'Noto Serif KR','Nanum Myeongjo',serif; }
         .tabular { font-variant-numeric: tabular-nums; font-family: 'Roboto Mono','SF Mono',monospace; }
-        .stamp-chip:nth-child(odd) { transform: rotate(-0.6deg); }
-        .stamp-chip:nth-child(even) { transform: rotate(0.6deg); }
         input, select { color-scheme: dark; }
       `}</style>
 
@@ -757,8 +763,16 @@ export default function App() {
             <div className="rounded-2xl p-4" style={card}>
               <p className="text-sm font-semibold mb-2" style={{ color: "#93A0B8" }}>자산 종류 편집</p>
               <div className="flex flex-col gap-2">
-                {assetTypes.map((at) => (
-                  <div key={at.id} className="stamp-chip flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${at.color}` }}>
+                {assetTypes.map((at, idx) => (
+                  <div key={at.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${at.color}` }}>
+                    <div className="flex flex-col flex-shrink-0" style={{ color: "#5A6478" }}>
+                      <button onClick={() => setAssetTypes((prev) => reorder(prev, idx, -1))} disabled={idx === 0} style={{ opacity: idx === 0 ? 0.3 : 1 }}>
+                        <ChevronUp size={13} />
+                      </button>
+                      <button onClick={() => setAssetTypes((prev) => reorder(prev, idx, 1))} disabled={idx === assetTypes.length - 1} style={{ opacity: idx === assetTypes.length - 1 ? 0.3 : 1 }}>
+                        <ChevronDown size={13} />
+                      </button>
+                    </div>
                     {editingAssetTypeId === at.id ? (
                       <input
                         autoFocus
@@ -877,8 +891,16 @@ export default function App() {
             <div className="rounded-2xl p-4" style={card}>
               <p className="text-sm font-semibold mb-2">🏷️ 카테고리 편집 ({categories.length}개)</p>
               <div className="flex flex-col gap-2">
-                {categories.map((cat) => (
-                  <div key={cat.id} className="stamp-chip flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${cat.color}` }}>
+                {categories.map((cat, idx) => (
+                  <div key={cat.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${cat.color}` }}>
+                    <div className="flex flex-col flex-shrink-0" style={{ color: "#5A6478" }}>
+                      <button onClick={() => setCategories((prev) => reorder(prev, idx, -1))} disabled={idx === 0} style={{ opacity: idx === 0 ? 0.3 : 1 }}>
+                        <ChevronUp size={13} />
+                      </button>
+                      <button onClick={() => setCategories((prev) => reorder(prev, idx, 1))} disabled={idx === categories.length - 1} style={{ opacity: idx === categories.length - 1 ? 0.3 : 1 }}>
+                        <ChevronDown size={13} />
+                      </button>
+                    </div>
                     {editingCatId === cat.id ? (
                       <input
                         autoFocus
@@ -926,8 +948,16 @@ export default function App() {
             <div className="rounded-2xl p-4" style={card}>
               <p className="text-sm font-semibold mb-2">💳 결제수단 편집 ({paymentMethods.length}개)</p>
               <div className="flex flex-col gap-2">
-                {paymentMethods.map((pm) => (
+                {paymentMethods.map((pm, idx) => (
                   <div key={pm.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: "1.5px dashed #3A4E6E" }}>
+                    <div className="flex flex-col flex-shrink-0" style={{ color: "#5A6478" }}>
+                      <button onClick={() => setPaymentMethods((prev) => reorder(prev, idx, -1))} disabled={idx === 0} style={{ opacity: idx === 0 ? 0.3 : 1 }}>
+                        <ChevronUp size={13} />
+                      </button>
+                      <button onClick={() => setPaymentMethods((prev) => reorder(prev, idx, 1))} disabled={idx === paymentMethods.length - 1} style={{ opacity: idx === paymentMethods.length - 1 ? 0.3 : 1 }}>
+                        <ChevronDown size={13} />
+                      </button>
+                    </div>
                     {editingPmId === pm.id ? (
                       <input
                         autoFocus
