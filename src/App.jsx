@@ -260,6 +260,7 @@ export default function App() {
   const [manualDate, setManualDate] = useState(todayStr());
   const [manualDesc, setManualDesc] = useState("");
   const [manualAmount, setManualAmount] = useState("");
+  const [manualIsIncome, setManualIsIncome] = useState(false);
   const [manualCatId, setManualCatId] = useState("");
   const [manualPmId, setManualPmId] = useState("");
 
@@ -540,8 +541,9 @@ export default function App() {
   };
 
   const addManualTransaction = () => {
-    const amountNum = Number(String(manualAmount).replace(/[^0-9-]/g, "")) || 0;
-    if (!manualDesc.trim() && amountNum === 0) return;
+    const absAmount = Number(String(manualAmount).replace(/[^0-9]/g, "")) || 0;
+    if (!manualDesc.trim() && absAmount === 0) return;
+    const amountNum = manualIsIncome ? -absAmount : absAmount;
     const newTx = {
       id: uid(),
       date: manualDate || todayStr(),
@@ -554,6 +556,7 @@ export default function App() {
     rememberCategory(newTx.description, newTx.categoryId);
     setManualDesc("");
     setManualAmount("");
+    setManualIsIncome(false);
     setManualDate(todayStr());
   };
 
@@ -760,7 +763,18 @@ export default function App() {
                             <p className="text-sm truncate" style={{ color: "#EDE6D3" }}>{t.description}</p>
                             <p className="text-xs" style={{ color: cat?.color || "#5A6478" }}>{labelWithEmoji(cat)} · {t.date}</p>
                           </div>
-                          <p className="tabular text-sm font-semibold flex-shrink-0 ml-3" style={{ color: t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}>{won(t.amount)}</p>
+                          <div className="flex items-center gap-1.5 flex-shrink-0 ml-3">
+                            <span
+                              className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                              style={{
+                                background: t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
+                                color: t.amount < 0 ? "#4E8F72" : "#B5533B"
+                              }}
+                            >
+                              {t.amount < 0 ? "입금" : "지출"}
+                            </span>
+                            <p className="tabular text-sm font-semibold" style={{ color: "#EDE6D3" }}>{won(Math.abs(t.amount))}</p>
+                          </div>
                         </div>
                       );
                     })}
@@ -798,10 +812,26 @@ export default function App() {
                   inputMode="numeric"
                   placeholder="금액"
                   value={manualAmount}
-                  onChange={(e) => setManualAmount(e.target.value.replace(/[^0-9-]/g, ""))}
-                  className="tabular w-28 rounded-lg px-3 py-2 text-sm text-right outline-none"
+                  onChange={(e) => setManualAmount(e.target.value.replace(/[^0-9]/g, ""))}
+                  className="tabular w-24 rounded-lg px-3 py-2 text-sm text-right outline-none"
                   style={inputStyle}
                 />
+                <div className="flex rounded-lg overflow-hidden flex-shrink-0" style={{ border: "1px solid #2A3B57" }}>
+                  <button
+                    onClick={() => setManualIsIncome(false)}
+                    className="px-2.5 py-2 text-xs font-semibold"
+                    style={{ background: !manualIsIncome ? "rgba(181,83,59,0.2)" : "transparent", color: !manualIsIncome ? "#B5533B" : "#93A0B8" }}
+                  >
+                    지출
+                  </button>
+                  <button
+                    onClick={() => setManualIsIncome(true)}
+                    className="px-2.5 py-2 text-xs font-semibold"
+                    style={{ background: manualIsIncome ? "rgba(78,143,114,0.2)" : "transparent", color: manualIsIncome ? "#4E8F72" : "#93A0B8" }}
+                  >
+                    입금
+                  </button>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <select value={manualCatId} onChange={(e) => setManualCatId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
@@ -878,14 +908,25 @@ export default function App() {
                           >
                             {categories.map((c) => (<option key={c.id} value={c.id}>{labelWithEmoji(c)}</option>))}
                           </select>
+                          <button
+                            onClick={() => updateTx(t.id, { amount: -t.amount })}
+                            className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+                            style={{
+                              background: t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
+                              color: t.amount < 0 ? "#4E8F72" : "#B5533B"
+                            }}
+                          >
+                            {t.amount < 0 ? "입금" : "지출"}
+                          </button>
                           <input
                             type="text"
                             inputMode="numeric"
-                            value={Number(t.amount || 0).toLocaleString("ko-KR")}
+                            value={Math.abs(Number(t.amount || 0)).toLocaleString("ko-KR")}
                             onChange={(e) => {
-                              const digitsOnly = e.target.value.replace(/[^0-9-]/g, "");
-                              const num = digitsOnly === "" || digitsOnly === "-" ? 0 : Number(digitsOnly);
-                              updateTx(t.id, { amount: num });
+                              const digitsOnly = e.target.value.replace(/[^0-9]/g, "");
+                              const abs = digitsOnly === "" ? 0 : Number(digitsOnly);
+                              const signed = t.amount < 0 ? -abs : abs;
+                              updateTx(t.id, { amount: signed });
                             }}
                             className="tabular w-20 flex-shrink-0 bg-transparent outline-none text-sm text-right font-semibold"
                             style={{ color: t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
