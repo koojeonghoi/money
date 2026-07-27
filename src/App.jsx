@@ -60,56 +60,60 @@ function moveItem(list, fromIndex, toIndex) {
 }
 
 // Press-and-hold-then-drag reordering for editable lists (categories, asset types, payment methods).
-// Drag starts from a dedicated handle; the dragged row follows the pointer 1:1 while siblings
-// swap live based on which row's midpoint the pointer has crossed.
+// The dragged row follows the pointer 1:1. Siblings only get a live *preview* shift (via CSS
+// transform + transition) to open a gap — the underlying array isn't actually reordered until
+// the pointer is released, which avoids the instant DOM-reflow "jump" that live-splicing caused.
 function useDragReorder(items, setItems) {
   const containerRef = useRef(null);
-  const dragInfo = useRef(null); // { id, startY, startCenter }
-  const [dragState, setDragState] = useState(null); // { id, y }
+  const dragInfo = useRef(null); // { id, startY, startCenter, originIndex, rowSpan }
+  const [dragState, setDragState] = useState(null); // { id, y, targetIndex }
 
   const handlePointerDown = (id) => (e) => {
     e.preventDefault();
     const container = containerRef.current;
-    const currentIndex = items.findIndex((it) => it.id === id);
-    const rowEl = container ? container.children[currentIndex] : null;
+    const originIndex = items.findIndex((it) => it.id === id);
+    const rows = container ? Array.from(container.children) : [];
+    const rowEl = rows[originIndex];
     const rect = rowEl ? rowEl.getBoundingClientRect() : null;
     const startCenter = rect ? rect.top + rect.height / 2 : e.clientY;
-    dragInfo.current = { id, startY: e.clientY, startCenter };
-    setDragState({ id, y: 0 });
+    // rowSpan = distance between consecutive row tops (row height + gap), used to shift siblings by one slot
+    const rowSpan = rows.length > 1 ? rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top : (rect?.height || 44);
+    dragInfo.current = { id, startY: e.clientY, startCenter, originIndex, rowSpan };
+    setDragState({ id, y: 0, targetIndex: originIndex });
   };
 
   useEffect(() => {
     if (!dragState) return;
 
     const handleMove = (e) => {
-      const { id, startY, startCenter } = dragInfo.current;
+      const { id, startY, startCenter, originIndex } = dragInfo.current;
       const deltaY = e.clientY - startY;
-      setDragState({ id, y: deltaY });
 
       const container = containerRef.current;
-      if (!container) return;
-      const rows = Array.from(container.children);
-      const currentIndex = items.findIndex((it) => it.id === id);
-      // Use the row's original (pre-drag) center + raw pointer delta — never re-measure the
-      // dragged row itself, since its rect already includes the transform we just applied.
-      const draggedCenter = startCenter + deltaY;
-
-      let targetIndex = 0;
-      rows.forEach((row, idx) => {
-        if (idx === currentIndex) return;
-        const rect = row.getBoundingClientRect();
-        const center = rect.top + rect.height / 2;
-        if (center < draggedCenter) targetIndex++;
-      });
-
-      if (targetIndex !== currentIndex) {
-        setItems((prev) => moveItem(prev, currentIndex, targetIndex));
+      let targetIndex = originIndex;
+      if (container) {
+        const rows = Array.from(container.children);
+        const draggedCenter = startCenter + deltaY;
+        targetIndex = 0;
+        rows.forEach((row, idx) => {
+          if (idx === originIndex) return;
+          const rect = row.getBoundingClientRect();
+          const center = rect.top + rect.height / 2;
+          if (center < draggedCenter) targetIndex++;
+        });
       }
+      setDragState({ id, y: deltaY, targetIndex });
     };
 
     const handleUp = () => {
+      const { originIndex } = dragInfo.current || {};
+      setDragState((current) => {
+        if (current && originIndex !== undefined && current.targetIndex !== originIndex) {
+          setItems((prev) => moveItem(prev, originIndex, current.targetIndex));
+        }
+        return null;
+      });
       dragInfo.current = null;
-      setDragState(null);
     };
 
     window.addEventListener("pointermove", handleMove);
@@ -120,12 +124,22 @@ function useDragReorder(items, setItems) {
       window.removeEventListener("pointerup", handleUp);
       window.removeEventListener("pointercancel", handleUp);
     };
-  }, [dragState, items, setItems]);
+  }, [dragState?.id, setItems]);
 
-  const rowStyle = (id) =>
-    dragState?.id === id
-      ? { transform: `translateY(${dragState.y}px)`, position: "relative", zIndex: 10, boxShadow: "0 6px 16px rgba(0,0,0,0.4)" }
-      : { position: "relative" };
+  const rowStyle = (id) => {
+    if (!dragState) return { position: "relative" };
+    if (dragState.id === id) {
+      return { transform: `translateY(${dragState.y}px)`, position: "relative", zIndex: 10, boxShadow: "0 6px 16px rgba(0,0,0,0.4)" };
+    }
+    const { originIndex, rowSpan } = dragInfo.current || {};
+    if (originIndex === undefined) return { position: "relative" };
+    const idx = items.findIndex((it) => it.id === id);
+    const { targetIndex } = dragState;
+    let shift = 0;
+    if (originIndex < targetIndex && idx > originIndex && idx <= targetIndex) shift = -rowSpan;
+    else if (originIndex > targetIndex && idx >= targetIndex && idx < originIndex) shift = rowSpan;
+    return { transform: `translateY(${shift}px)`, transition: "transform 150ms ease", position: "relative" };
+  };
 
   return { containerRef, handlePointerDown, rowStyle };
 }
@@ -646,31 +660,44 @@ export default function App() {
                 </div>
               )}
 
-              <button
-                onClick={() => setShowAssetBreakdown((v) => !v)}
-                className="rounded-2xl p-4 text-left w-full"
-                style={card}
-              >
-                <div className="flex items-center justify-between">
+              <div className="rounded-2xl p-4" style={card}>
+                <button onClick={() => setShowAssetBreakdown((v) => !v)} className="flex items-center justify-between w-full text-left">
                   <p className="text-xs font-semibold" style={{ color: "#93A0B8" }}>총 자산</p>
-                  <span className="text-xs" style={{ color: "#93A0B8" }}>{showAssetBreakdown ? "접기 ▲" : "내역보기 ▼"}</span>
-                </div>
+                  <span className="text-xs" style={{ color: "#93A0B8" }}>{showAssetBreakdown ? "접기 ▲" : "선택해서 보기 ▼"}</span>
+                </button>
                 <p className="tabular text-2xl font-bold" style={{ color: "#C9A227" }}>{won(totalAssets)}</p>
+                {selectedAssetIds.length > 0 && (
+                  <div className="mt-2 flex items-center justify-between text-xs rounded-lg px-2.5 py-1.5" style={{ background: "#101B2D", border: "1px solid #C9A227" }}>
+                    <span style={{ color: "#93A0B8" }}>{selectedAssetIds.length}개 선택</span>
+                    <span className="tabular font-bold" style={{ color: "#C9A227" }}>{won(selectedAssetsTotal)}</span>
+                    <button onClick={() => setSelectedAssetIds([])} style={{ color: "#93A0B8" }}>선택 해제</button>
+                  </div>
+                )}
                 {showAssetBreakdown && (
-                  <div className="mt-3 flex flex-col gap-1.5" style={{ borderTop: "1px solid #2A3B57", paddingTop: 10 }}>
-                    {totalsByAssetType.length === 0 ? (
-                      <p className="text-xs" style={{ color: "#5A6478" }}>아직 등록된 자산이 없어요.</p>
+                  <div className="mt-3 flex flex-col" style={{ borderTop: "1px solid #2A3B57", paddingTop: 6 }}>
+                    {assets.length === 0 ? (
+                      <p className="text-xs py-2" style={{ color: "#5A6478" }}>아직 등록된 자산이 없어요.</p>
                     ) : (
-                      totalsByAssetType.map((a) => (
-                        <div key={a.id} className="flex items-center justify-between text-sm">
-                          <span style={{ color: a.color }}>{a.name}</span>
-                          <span className="tabular font-semibold">{won(a.total)}</span>
-                        </div>
-                      ))
+                      assets.map((a) => {
+                        const at = assetTypeMap[a.assetTypeId];
+                        const selected = selectedAssetIds.includes(a.id);
+                        return (
+                          <label key={a.id} className="flex items-center gap-2 text-sm py-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={() => toggleAssetSelection(a.id)}
+                              style={{ accentColor: "#C9A227", width: 15, height: 15, flexShrink: 0 }}
+                            />
+                            <span className="flex-1 min-w-0 truncate" style={{ color: at?.color || "#EDE6D3" }}>{a.name}</span>
+                            <span className="tabular font-semibold flex-shrink-0">{won(a.amount)}</span>
+                          </label>
+                        );
+                      })
                     )}
                   </div>
                 )}
-              </button>
+              </div>
 
               {(fixedRatio !== null || savingRatio !== null) && (
                 <div className="rounded-2xl p-4 flex flex-col gap-2" style={card}>
