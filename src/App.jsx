@@ -235,6 +235,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showAssetBreakdown, setShowAssetBreakdown] = useState(false);
+  const [selectedAssetIds, setSelectedAssetIds] = useState([]);
 
   const [editingCatId, setEditingCatId] = useState(null);
   const [editingPmId, setEditingPmId] = useState(null);
@@ -501,7 +502,13 @@ export default function App() {
     setAssets((prev) => [newAsset, ...prev]);
   };
   const updateAsset = (id, patch) => setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-  const deleteAsset = (id) => setAssets((prev) => prev.filter((a) => a.id !== id));
+  const deleteAsset = (id) => {
+    setAssets((prev) => prev.filter((a) => a.id !== id));
+    setSelectedAssetIds((prev) => prev.filter((x) => x !== id));
+  };
+  const toggleAssetSelection = (id) => {
+    setSelectedAssetIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
 
   // ---- transaction CRUD ----
   const updateTx = (id, patch) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -561,6 +568,7 @@ export default function App() {
 
   const grandTotal = transactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const totalAssets = assets.reduce((s, a) => s + Number(a.amount || 0), 0);
+  const selectedAssetsTotal = assets.filter((a) => selectedAssetIds.includes(a.id)).reduce((s, a) => s + Number(a.amount || 0), 0);
   const incomeNum = Number(income) || 0;
   const fixedTotal = totalsByType.find((t) => t.type === "fixed")?.total || 0;
   const savingTotal = totalsByType.find((t) => t.type === "saving")?.total || 0;
@@ -968,6 +976,13 @@ export default function App() {
                   <Plus size={12} /> 자산 추가
                 </button>
               </div>
+              {selectedAssetIds.length > 0 && (
+                <div className="mx-4 mb-2 rounded-xl px-3 py-2 flex items-center justify-between" style={{ background: "#101B2D", border: "1px solid #C9A227" }}>
+                  <span className="text-xs" style={{ color: "#93A0B8" }}>{selectedAssetIds.length}개 선택됨</span>
+                  <span className="tabular text-sm font-bold" style={{ color: "#C9A227" }}>{won(selectedAssetsTotal)}</span>
+                  <button onClick={() => setSelectedAssetIds([])} className="text-xs" style={{ color: "#93A0B8" }}>선택 해제</button>
+                </div>
+              )}
               {assets.length === 0 ? (
                 <div className="px-4 pb-6 pt-2 text-sm text-center" style={{ color: "#5A6478" }}>
                   아직 등록된 자산이 없어요. "자산 추가"로 시작하세요.
@@ -976,9 +991,17 @@ export default function App() {
                 <div className="pb-1">
                   {assets.map((a) => {
                     const at = assetTypeMap[a.assetTypeId];
+                    const selected = selectedAssetIds.includes(a.id);
                     return (
-                      <div key={a.id} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b" }}>
+                      <div key={a.id} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b", background: selected ? "rgba(201,162,39,0.08)" : "transparent" }}>
                         <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleAssetSelection(a.id)}
+                            className="flex-shrink-0"
+                            style={{ accentColor: "#C9A227", width: 16, height: 16 }}
+                          />
                           <input
                             value={a.name}
                             onChange={(e) => updateAsset(a.id, { name: e.target.value })}
