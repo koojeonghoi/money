@@ -43,6 +43,16 @@ const DEFAULT_ASSET_TYPES = [
 
 const TYPE_LABEL = { fixed: "고정지출", variable: "변동지출", saving: "저축/자산" };
 const TYPE_ORDER = ["fixed", "variable", "saving"];
+const SAVING_KEYWORDS = /저축|적금|예금|연금|펀드|주식|채권|배당|청약/;
+
+// Re-derive a category's effective type at read time instead of trusting only the stored value —
+// this way a savings-named category always buckets correctly even if older stored data (or a
+// not-yet-updated device via sync) still has it marked "variable".
+function effectiveCategoryType(cat) {
+  if (!cat) return "variable";
+  if (cat.type === "variable" && SAVING_KEYWORDS.test(cat.name)) return "saving";
+  return cat.type;
+}
 
 const NAV_ITEMS = [
   { id: "home", label: "홈화면", icon: Home },
@@ -395,7 +405,12 @@ export default function App() {
 
   const applySnapshot = (parsed) => {
     if (!parsed) return;
-    if (parsed.categories?.length) setCategories(parsed.categories);
+    if (parsed.categories?.length) {
+      const corrected = parsed.categories.map((c) =>
+        c.type === "variable" && SAVING_KEYWORDS.test(c.name) ? { ...c, type: "saving" } : c
+      );
+      setCategories(corrected);
+    }
     if (parsed.paymentMethods?.length) setPaymentMethods(parsed.paymentMethods);
     if (parsed.assetTypes?.length) setAssetTypes(parsed.assetTypes);
     if (parsed.categoryMemory) setCategoryMemory(parsed.categoryMemory);
@@ -612,7 +627,18 @@ export default function App() {
 
   // ---- category CRUD ----
   const updateCategory = (id, patch) => {
-    setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    setCategories((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        const next = { ...c, ...patch };
+        // if the name now looks like a savings/asset category and the type was never touched
+        // from the default, nudge it to "saving" instead of leaving it under 변동지출
+        if (patch.name && c.type === "variable" && SAVING_KEYWORDS.test(patch.name)) {
+          next.type = "saving";
+        }
+        return next;
+      })
+    );
   };
   const addCategory = () => {
     const newCat = { id: uid(), name: "새 카테고리", emoji: "", color: PALETTE[categories.length % PALETTE.length], type: "variable" };
@@ -736,7 +762,7 @@ export default function App() {
       type,
       label: TYPE_LABEL[type],
       total: categories
-        .filter((c) => c.type === type)
+        .filter((c) => effectiveCategoryType(c) === type)
         .reduce((sum, c) => sum + periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0)
     }));
   }, [categories, periodTransactions]);
@@ -756,7 +782,7 @@ export default function App() {
   const fixedRatio = incomeNum > 0 ? (fixedTotal / incomeNum) * 100 : null;
   const savingRatio = incomeNum > 0 ? (savingTotal / incomeNum) * 100 : null;
 
-  const pieData = totalsByCategory.filter((c) => c.total > 0);
+  const pieData = totalsByCategory.filter((c) => c.total > 0 && effectiveCategoryType(c) !== "saving");
   const assetPieData = totalsByAssetType.filter((a) => a.total > 0);
 
   const toggleCategoryFilter = (id) => {
@@ -765,10 +791,21 @@ export default function App() {
 
   const filteredTransactions = periodTransactions.filter((t) => {
     const matchesCategory = selectedCategoryIds.length === 0 || selectedCategoryIds.includes(t.categoryId);
-    const matchesType = typeFilter === "all" || (typeFilter === "expense" ? t.amount >= 0 : t.amount < 0);
+    const catType = effectiveCategoryType(catMap[t.categoryId]);
+    const matchesType =
+      typeFilter === "all" ? true :
+      typeFilter === "expense" ? (t.amount >= 0 && catType !== "saving") :
+      typeFilter === "saving" ? catType === "saving" :
+      t.amount < 0; // income
     return matchesCategory && matchesType;
   });
   const filteredTotal = filteredTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const filteredTotalLabel =
+    typeFilter === "income" ? "입금 합계" :
+    typeFilter === "saving" ? "저축 합계" :
+    typeFilter === "expense" ? "지출 합계" :
+    filteredTotal >= 0 ? "지출 합계" : "순수입";
+  const filteredTotalAbs = Math.abs(filteredTotal);
 
   const card = { background: "#16233A", border: "1px solid #2A3B57" };
   const inputStyle = { background: "#101B2D", border: "1px solid #2A3B57", color: "#EDE6D3" };
@@ -1042,7 +1079,7 @@ export default function App() {
                 )}
               </div>
               <div className="flex gap-1.5 mb-2">
-                {[["all", "전체"], ["expense", "지출만"], ["income", "입금만"]].map(([val, label]) => (
+                {[["all", "전체"], ["expense", "지출만"], ["income", "입금만"], ["saving", "저축만"]].map(([val, label]) => (
                   <button
                     key={val}
                     onClick={() => setTypeFilter(val)}
@@ -1069,8 +1106,8 @@ export default function App() {
                 })}
               </div>
               <p className="text-sm mt-3">
-                {selectedCategoryIds.length === 0 ? "전체 합계" : `${selectedCategoryIds.length}개 카테고리 합계`}{" "}
-                <span className="tabular font-bold" style={{ color: "#C9A227" }}>{won(filteredTotal)}</span>
+                {selectedCategoryIds.length === 0 ? filteredTotalLabel : `${selectedCategoryIds.length}개 카테고리 ${filteredTotalLabel}`}{" "}
+                <span className="tabular font-bold" style={{ color: "#C9A227" }}>{won(filteredTotalAbs)}</span>
                 <span className="text-xs ml-2" style={{ color: "#5A6478" }}>({filteredTransactions.length}건)</span>
               </p>
             </div>
