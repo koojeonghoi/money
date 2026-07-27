@@ -181,6 +181,7 @@ export default function App() {
   const [syncSecret, setSyncSecret] = useState("");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error | no-secret
   const [syncSecretDraft, setSyncSecretDraft] = useState("");
+  const [syncErrorMessage, setSyncErrorMessage] = useState("");
 
   const buildSnapshot = () => ({
     categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income
@@ -220,10 +221,11 @@ export default function App() {
       try {
         const res = await fetch("/api/sync", { headers: { "x-sync-secret": storedSecret } });
         const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "동기화 실패");
+        if (!res.ok) throw new Error(json.error || `요청 실패 (${res.status})`);
         if (json.data) applySnapshot(json.data);
         setSyncStatus("synced");
       } catch (e) {
+        setSyncErrorMessage(e.message || "알 수 없는 오류");
         setSyncStatus("error");
       } finally {
         setLoaded(true);
@@ -251,9 +253,10 @@ export default function App() {
           body: JSON.stringify({ secret: syncSecret, data: snapshot })
         });
         const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "동기화 실패");
+        if (!res.ok) throw new Error(json.error || `요청 실패 (${res.status})`);
         setSyncStatus("synced");
       } catch (e) {
+        setSyncErrorMessage(e.message || "알 수 없는 오류");
         setSyncStatus("error");
       }
     }, 500);
@@ -953,7 +956,7 @@ export default function App() {
                 )}
                 {syncSecret && syncStatus === "synced" && <span style={{ color: "#4E8F72" }}>✓ 동기화됨</span>}
                 {syncSecret && syncStatus === "error" && (
-                  <span style={{ color: "#B5533B" }}>동기화 실패 — 서버에 Upstash Redis가 연결되어 있는지, 비밀번호가 맞는지 확인해주세요</span>
+                  <span style={{ color: "#B5533B" }}>동기화 실패: {syncErrorMessage}</span>
                 )}
               </div>
             </div>
