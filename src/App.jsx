@@ -70,6 +70,10 @@ function useDragReorder(items, setItems) {
 
   const handlePointerDown = (id) => (e) => {
     e.preventDefault();
+    // Without this, moving the pointer over row text during a drag triggers native text selection
+    // (multi-line highlight), which fights with the reorder gesture.
+    document.body.style.userSelect = "none";
+    document.body.style.webkitUserSelect = "none";
     const container = containerRef.current;
     const originIndex = items.findIndex((it) => it.id === id);
     const rows = container ? Array.from(container.children) : [];
@@ -106,6 +110,8 @@ function useDragReorder(items, setItems) {
     };
 
     const handleUp = () => {
+      document.body.style.userSelect = "";
+      document.body.style.webkitUserSelect = "";
       const { originIndex } = dragInfo.current || {};
       setDragState((current) => {
         if (current && originIndex !== undefined && current.targetIndex !== originIndex) {
@@ -150,6 +156,115 @@ function uid() {
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// Korean public holidays (신정/설날/추석 연휴 등 포함, 대체공휴일 반영), 2024–2029.
+// Kept as a small static list instead of a holiday library, since that pulled in every country's
+// data and bloated the bundle ~4x for a feature that only ever needs KR.
+const KR_HOLIDAYS = new Set([
+  "2024-01-01", "2024-02-10", "2024-02-11", "2024-02-12", "2024-03-01", "2024-05-05", "2024-05-06",
+  "2024-05-15", "2024-06-06", "2024-08-15", "2024-09-16", "2024-09-17", "2024-09-18", "2024-10-03",
+  "2024-10-09", "2024-12-25",
+  "2025-01-01", "2025-01-29", "2025-01-30", "2025-01-31", "2025-03-01", "2025-03-03", "2025-05-05",
+  "2025-05-06", "2025-06-06", "2025-08-15", "2025-10-03", "2025-10-05", "2025-10-06", "2025-10-07",
+  "2025-10-08", "2025-10-09", "2025-12-25",
+  "2026-01-01", "2026-02-17", "2026-02-18", "2026-02-19", "2026-03-01", "2026-03-02", "2026-05-05",
+  "2026-05-24", "2026-05-25", "2026-06-06", "2026-07-17", "2026-08-15", "2026-08-17", "2026-09-24",
+  "2026-09-25", "2026-09-26", "2026-10-03", "2026-10-05", "2026-10-09", "2026-12-25",
+  "2027-01-01", "2027-02-07", "2027-02-08", "2027-02-09", "2027-03-01", "2027-05-05", "2027-05-13",
+  "2027-06-06", "2027-07-17", "2027-07-19", "2027-08-15", "2027-08-16", "2027-09-14", "2027-09-15",
+  "2027-09-16", "2027-10-03", "2027-10-04", "2027-10-09", "2027-10-11", "2027-12-25", "2027-12-27",
+  "2028-01-01", "2028-01-27", "2028-01-28", "2028-01-29", "2028-03-01", "2028-05-02", "2028-05-05",
+  "2028-06-06", "2028-07-17", "2028-08-15", "2028-10-02", "2028-10-03", "2028-10-04", "2028-10-05",
+  "2028-10-09", "2028-12-25",
+  "2029-01-01", "2029-02-13", "2029-02-14", "2029-02-15", "2029-03-01", "2029-05-05", "2029-05-07",
+  "2029-05-20", "2029-05-21", "2029-06-06", "2029-07-17", "2029-08-15", "2029-09-21", "2029-09-22",
+  "2029-09-23", "2029-09-24", "2029-10-03", "2029-10-09", "2029-12-25"
+]);
+
+function dateToYmd(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function isBusinessDay(date) {
+  const day = date.getDay();
+  if (day === 0 || day === 6) return false;
+  return !KR_HOLIDAYS.has(dateToYmd(date));
+}
+
+// If the given date isn't a business day, step backward until one is found
+// (matches "지급일이 휴일이면 그 앞 영업일에 지급" rule).
+function adjustToPrecedingBusinessDay(date) {
+  const d = new Date(date);
+  while (!isBusinessDay(d)) d.setDate(d.getDate() - 1);
+  return d;
+}
+
+function getPayday(year, month, paydayDom) {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const day = Math.min(paydayDom, lastDay);
+  return adjustToPrecedingBusinessDay(new Date(year, month, day));
+}
+
+// The pay-period containing refDate: from this cycle's payday to the day before the next payday.
+function getPayPeriodForDate(refDate, paydayDom) {
+  const y = refDate.getFullYear();
+  const m = refDate.getMonth();
+  const thisMonthPayday = getPayday(y, m, paydayDom);
+  if (refDate >= thisMonthPayday) {
+    const nextMonth = m === 11 ? 0 : m + 1;
+    const nextYear = m === 11 ? y + 1 : y;
+    const end = getPayday(nextYear, nextMonth, paydayDom);
+    end.setDate(end.getDate() - 1);
+    return { start: thisMonthPayday, end };
+  }
+  const prevMonth = m === 0 ? 11 : m - 1;
+  const prevYear = m === 0 ? y - 1 : y;
+  const start = getPayday(prevYear, prevMonth, paydayDom);
+  const end = new Date(thisMonthPayday);
+  end.setDate(end.getDate() - 1);
+  return { start, end };
+}
+
+// offset 0 = the pay-period containing today, -1 = previous period, +1 = next, etc.
+function getPayPeriodByOffset(paydayDom, offset) {
+  const { start } = getPayPeriodForDate(new Date(), paydayDom);
+  const refDate = new Date(start);
+  refDate.setMonth(refDate.getMonth() + offset);
+  refDate.setDate(refDate.getDate() + 5); // land solidly inside the shifted period
+  return getPayPeriodForDate(refDate, paydayDom);
+}
+
+function formatPeriodDate(d) {
+  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Best-effort parse of whatever date string OCR/manual entry produced. periodStart/periodEnd give
+// context to disambiguate values with no year (or no month), since a pay-period spans two months.
+function parseTxDate(raw, periodStart, periodEnd) {
+  if (!raw) return null;
+  const cleaned = String(raw).trim();
+
+  let m = cleaned.match(/(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+
+  m = cleaned.match(/(\d{1,2})[.\/월]\s*(\d{1,2})/);
+  if (m) {
+    const month = Number(m[1]) - 1;
+    const day = Number(m[2]);
+    if (periodStart && periodStart.getMonth() === month) return new Date(periodStart.getFullYear(), month, day);
+    if (periodEnd && periodEnd.getMonth() === month) return new Date(periodEnd.getFullYear(), month, day);
+    return periodEnd ? new Date(periodEnd.getFullYear(), month, day) : new Date(new Date().getFullYear(), month, day);
+  }
+
+  m = cleaned.match(/^(\d{1,2})\s*일/);
+  if (m) {
+    const day = Number(m[1]);
+    if (periodStart && day >= periodStart.getDate()) return new Date(periodStart.getFullYear(), periodStart.getMonth(), day);
+    if (periodEnd) return new Date(periodEnd.getFullYear(), periodEnd.getMonth(), day);
+  }
+
+  return null;
 }
 
 function won(n) {
@@ -255,7 +370,10 @@ export default function App() {
   const [editingPmId, setEditingPmId] = useState(null);
   const [editingAssetTypeId, setEditingAssetTypeId] = useState(null);
 
-  const [expenseFilter, setExpenseFilter] = useState("all");
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState([]); // empty = all categories
+  const [typeFilter, setTypeFilter] = useState("all"); // all | expense | income
+  const [paydayDom, setPaydayDom] = useState(25);
+  const [periodOffset, setPeriodOffset] = useState(0); // 0 = current pay-period, -1 = previous, +1 = next
 
   const [manualDate, setManualDate] = useState(todayStr());
   const [manualDesc, setManualDesc] = useState("");
@@ -272,7 +390,7 @@ export default function App() {
   const [syncErrorMessage, setSyncErrorMessage] = useState("");
 
   const buildSnapshot = () => ({
-    categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income
+    categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income, paydayDom
   });
 
   const applySnapshot = (parsed) => {
@@ -284,6 +402,7 @@ export default function App() {
     if (parsed.transactions) setTransactions(parsed.transactions);
     if (parsed.assets) setAssets(parsed.assets);
     if (parsed.income) setIncome(parsed.income);
+    if (parsed.paydayDom) setPaydayDom(parsed.paydayDom);
   };
 
   // ---- load persisted data: localStorage first (instant/offline), then cloud if a sync passcode is set ----
@@ -349,12 +468,46 @@ export default function App() {
       }
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income, loaded, syncSecret]);
+  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income, paydayDom, loaded, syncSecret]);
 
-  const saveSyncSecret = () => {
+  const saveSyncSecret = async () => {
     const trimmed = syncSecretDraft.trim();
-    localStorage.setItem("sync-secret", trimmed);
-    setSyncSecret(trimmed);
+    if (!trimmed) {
+      localStorage.setItem("sync-secret", "");
+      setSyncSecret("");
+      setSyncStatus("idle");
+      return;
+    }
+
+    setSyncStatus("syncing");
+    try {
+      const res = await fetch("/api/sync", { headers: { "x-sync-secret": trimmed } });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `요청 실패 (${res.status})`);
+
+      const hasLocalData = transactions.length > 0 || assets.length > 0;
+      const hasCloudData = !!json.data && ((json.data.transactions?.length || 0) > 0 || (json.data.assets?.length || 0) > 0);
+
+      if (hasCloudData) {
+        if (hasLocalData) {
+          const useCloud = window.confirm(
+            "이미 클라우드에 저장된 데이터가 있어요.\n\n확인: 클라우드 데이터를 불러옵니다 (이 기기의 현재 데이터는 대체됩니다)\n취소: 이 기기 데이터를 클라우드에 저장합니다 (클라우드 데이터가 대체됩니다)"
+          );
+          if (useCloud) applySnapshot(json.data);
+        } else {
+          applySnapshot(json.data);
+        }
+      }
+      // if the cloud has no data yet, do nothing here — the normal debounced save effect
+      // will push this device's current (local) data up once syncSecret is set below.
+
+      localStorage.setItem("sync-secret", trimmed);
+      setSyncSecret(trimmed);
+      setSyncStatus("synced");
+    } catch (e) {
+      setSyncErrorMessage(e.message || "알 수 없는 오류");
+      setSyncStatus("error");
+    }
   };
 
   // set sensible defaults for the manual-add form once categories/payment methods are loaded
@@ -534,9 +687,10 @@ export default function App() {
   };
 
   const resetTransactions = () => {
-    if (transactions.length === 0) return;
-    if (window.confirm("이번 달 사용 내역을 모두 지울까요? 카테고리 설정은 유지됩니다.")) {
-      setTransactions([]);
+    if (periodTransactions.length === 0) return;
+    if (window.confirm(`${formatPeriodDate(payPeriod.start)} ~ ${formatPeriodDate(payPeriod.end)} 기간의 내역을 모두 지울까요? 다른 기간의 내역과 카테고리 설정은 유지됩니다.`)) {
+      const periodIds = new Set(periodTransactions.map((t) => t.id));
+      setTransactions((prev) => prev.filter((t) => !periodIds.has(t.id)));
     }
   };
 
@@ -561,11 +715,21 @@ export default function App() {
   };
 
   // ---- derived summaries ----
+  const payPeriod = useMemo(() => getPayPeriodByOffset(paydayDom, periodOffset), [paydayDom, periodOffset]);
+
+  const periodTransactions = useMemo(() => {
+    return transactions.filter((t) => {
+      const d = parseTxDate(t.date, payPeriod.start, payPeriod.end);
+      if (!d) return true; // don't hide entries we can't confidently date
+      return d >= payPeriod.start && d <= payPeriod.end;
+    });
+  }, [transactions, payPeriod]);
+
   const totalsByCategory = useMemo(() => {
     return categories
-      .map((c) => ({ ...c, total: transactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0) }))
+      .map((c) => ({ ...c, total: periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0) }))
       .filter((c) => c.total !== 0);
-  }, [categories, transactions]);
+  }, [categories, periodTransactions]);
 
   const totalsByType = useMemo(() => {
     return TYPE_ORDER.map((type) => ({
@@ -573,9 +737,9 @@ export default function App() {
       label: TYPE_LABEL[type],
       total: categories
         .filter((c) => c.type === type)
-        .reduce((sum, c) => sum + transactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0)
+        .reduce((sum, c) => sum + periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0)
     }));
-  }, [categories, transactions]);
+  }, [categories, periodTransactions]);
 
   const totalsByAssetType = useMemo(() => {
     return assetTypes
@@ -583,7 +747,7 @@ export default function App() {
       .filter((a) => a.total !== 0);
   }, [assetTypes, assets]);
 
-  const grandTotal = transactions.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const grandTotal = periodTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const totalAssets = assets.reduce((s, a) => s + Number(a.amount || 0), 0);
   const selectedAssetsTotal = assets.filter((a) => selectedAssetIds.includes(a.id)).reduce((s, a) => s + Number(a.amount || 0), 0);
   const incomeNum = Number(income) || 0;
@@ -595,7 +759,15 @@ export default function App() {
   const pieData = totalsByCategory.filter((c) => c.total > 0);
   const assetPieData = totalsByAssetType.filter((a) => a.total > 0);
 
-  const filteredTransactions = expenseFilter === "all" ? transactions : transactions.filter((t) => t.categoryId === expenseFilter);
+  const toggleCategoryFilter = (id) => {
+    setSelectedCategoryIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const filteredTransactions = periodTransactions.filter((t) => {
+    const matchesCategory = selectedCategoryIds.length === 0 || selectedCategoryIds.includes(t.categoryId);
+    const matchesType = typeFilter === "all" || (typeFilter === "expense" ? t.amount >= 0 : t.amount < 0);
+    return matchesCategory && matchesType;
+  });
   const filteredTotal = filteredTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
 
   const card = { background: "#16233A", border: "1px solid #2A3B57" };
@@ -717,9 +889,9 @@ export default function App() {
             <div className="lg:col-span-3 flex flex-col gap-5">
               <div className="grid grid-cols-3 gap-3">
                 {totalsByType.map((t) => (
-                  <div key={t.type} className="rounded-2xl p-3 text-center" style={card}>
-                    <p className="text-xs" style={{ color: "#93A0B8" }}>{t.label}</p>
-                    <p className="tabular text-base md:text-lg font-bold mt-1" style={{ color: "#C9A227" }}>{won(t.total)}</p>
+                  <div key={t.type} className="rounded-2xl p-3 text-center overflow-hidden" style={card}>
+                    <p className="text-xs truncate" style={{ color: "#93A0B8" }}>{t.label}</p>
+                    <p className="tabular text-sm sm:text-base md:text-lg font-bold mt-1 whitespace-nowrap" style={{ color: "#C9A227" }}>{won(t.total)}</p>
                   </div>
                 ))}
               </div>
@@ -749,13 +921,13 @@ export default function App() {
 
               <div className="rounded-2xl overflow-hidden" style={card}>
                 <p className="ledger-serif text-lg font-bold px-4 pt-4 pb-2" style={{ color: "#C9A227" }}>최근 내역</p>
-                {transactions.length === 0 ? (
+                {periodTransactions.length === 0 ? (
                   <div className="px-4 pb-6 pt-2 text-sm text-center" style={{ color: "#5A6478" }}>
-                    아직 내역이 없어요. 왼쪽에 캡처 이미지를 붙여넣어 시작하세요.
+                    이 기간엔 내역이 없어요. 왼쪽에 캡처 이미지를 붙여넣어 시작하세요.
                   </div>
                 ) : (
                   <div className="pb-1">
-                    {transactions.slice(0, 5).map((t) => {
+                    {periodTransactions.slice(0, 5).map((t) => {
                       const cat = catMap[t.categoryId];
                       return (
                         <div key={t.id} className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b" }}>
@@ -788,6 +960,21 @@ export default function App() {
         {/* ---------------- EXPENSES ---------------- */}
         {activeTab === "expenses" && (
           <div className="flex flex-col gap-5">
+            {/* Pay-period navigator */}
+            <div className="rounded-2xl p-3 flex items-center justify-between" style={card}>
+              <button onClick={() => setPeriodOffset((o) => o - 1)} className="px-2 py-1 text-lg font-bold" style={{ color: "#93A0B8" }}>‹</button>
+              <div className="text-center">
+                <p className="text-xs flex items-center justify-center gap-1.5" style={{ color: "#93A0B8" }}>
+                  급여주기{periodOffset === 0 ? " · 이번 기간" : ""}
+                  {periodOffset !== 0 && (
+                    <button onClick={() => setPeriodOffset(0)} className="underline" style={{ color: "#C9A227" }}>오늘로</button>
+                  )}
+                </p>
+                <p className="tabular text-sm font-semibold">{formatPeriodDate(payPeriod.start)} ~ {formatPeriodDate(payPeriod.end)}</p>
+              </div>
+              <button onClick={() => setPeriodOffset((o) => o + 1)} className="px-2 py-1 text-lg font-bold" style={{ color: "#93A0B8" }}>›</button>
+            </div>
+
             {/* Manual add form */}
             <div className="rounded-2xl p-4 flex flex-col gap-2.5" style={card}>
               <p className="text-sm font-semibold" style={{ color: "#93A0B8" }}>직접 추가</p>
@@ -848,28 +1035,41 @@ export default function App() {
 
             {/* Category filter */}
             <div className="rounded-2xl p-4" style={card}>
-              <p className="text-sm font-semibold mb-2" style={{ color: "#93A0B8" }}>카테고리별 조회</p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => setExpenseFilter("all")}
-                  className="text-xs px-3 py-1.5 rounded-full font-semibold"
-                  style={expenseFilter === "all" ? { background: "#C9A227", color: "#101B2D" } : { background: "#101B2D", color: "#93A0B8", border: "1px solid #2A3B57" }}
-                >
-                  전체
-                </button>
-                {categories.map((c) => (
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold" style={{ color: "#93A0B8" }}>카테고리별 조회</p>
+                {selectedCategoryIds.length > 0 && (
+                  <button onClick={() => setSelectedCategoryIds([])} className="text-xs" style={{ color: "#93A0B8" }}>선택 해제</button>
+                )}
+              </div>
+              <div className="flex gap-1.5 mb-2">
+                {[["all", "전체"], ["expense", "지출만"], ["income", "입금만"]].map(([val, label]) => (
                   <button
-                    key={c.id}
-                    onClick={() => setExpenseFilter(c.id)}
-                    className="text-xs px-3 py-1.5 rounded-full font-semibold"
-                    style={expenseFilter === c.id ? { background: c.color, color: "#101B2D" } : { background: "#101B2D", color: c.color, border: `1px solid ${c.color}` }}
+                    key={val}
+                    onClick={() => setTypeFilter(val)}
+                    className="text-xs px-3 py-1.5 rounded-full font-semibold flex-1"
+                    style={typeFilter === val ? { background: "#C9A227", color: "#101B2D" } : { background: "#101B2D", color: "#93A0B8", border: "1px solid #2A3B57" }}
                   >
-                    {labelWithEmoji(c)}
+                    {label}
                   </button>
                 ))}
               </div>
+              <div className="flex flex-wrap gap-2">
+                {categories.map((c) => {
+                  const active = selectedCategoryIds.includes(c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => toggleCategoryFilter(c.id)}
+                      className="text-xs px-3 py-1.5 rounded-full font-semibold"
+                      style={active ? { background: c.color, color: "#101B2D" } : { background: "#101B2D", color: c.color, border: `1px solid ${c.color}` }}
+                    >
+                      {labelWithEmoji(c)}
+                    </button>
+                  );
+                })}
+              </div>
               <p className="text-sm mt-3">
-                {expenseFilter === "all" ? "전체 합계" : `${labelWithEmoji(catMap[expenseFilter])} 합계`}{" "}
+                {selectedCategoryIds.length === 0 ? "전체 합계" : `${selectedCategoryIds.length}개 카테고리 합계`}{" "}
                 <span className="tabular font-bold" style={{ color: "#C9A227" }}>{won(filteredTotal)}</span>
                 <span className="text-xs ml-2" style={{ color: "#5A6478" }}>({filteredTransactions.length}건)</span>
               </p>
@@ -880,12 +1080,12 @@ export default function App() {
               <div className="flex items-center justify-between px-4 pt-4 pb-2">
                 <p className="ledger-serif text-lg font-bold" style={{ color: "#C9A227" }}>사용 내역</p>
                 <button onClick={resetTransactions} className="flex items-center gap-1 text-xs" style={{ color: "#93A0B8" }}>
-                  <RotateCcw size={12} /> 이번 달 초기화
+                  <RotateCcw size={12} /> 이 기간 초기화
                 </button>
               </div>
               {filteredTransactions.length === 0 ? (
                 <div className="px-4 pb-6 pt-2 text-sm text-center" style={{ color: "#5A6478" }}>
-                  {transactions.length === 0 ? "아직 내역이 없어요." : "이 카테고리에는 내역이 없어요."}
+                  {periodTransactions.length === 0 ? "이 기간엔 내역이 없어요." : "이 조건에 맞는 내역이 없어요."}
                 </div>
               ) : (
                 <div className="pb-1">
@@ -1168,6 +1368,27 @@ export default function App() {
                   style={inputStyle}
                 />
                 <span className="text-sm" style={{ color: "#93A0B8" }}>원</span>
+              </div>
+            </div>
+
+            {/* Payday */}
+            <div className="rounded-2xl p-4" style={card}>
+              <label className="text-xs font-semibold" style={{ color: "#93A0B8" }}>급여일 (매월 며칠, 지출 탭의 급여주기 계산 기준)</label>
+              <p className="text-xs mt-1 mb-1.5" style={{ color: "#5A6478" }}>급여일이 주말·공휴일이면 자동으로 그 앞 영업일로 계산해요.</p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  value={paydayDom}
+                  onChange={(e) => setPaydayDom(Math.min(31, Math.max(1, Number(e.target.value) || 1)))}
+                  className="tabular w-20 rounded-lg px-3 py-2 text-sm outline-none"
+                  style={inputStyle}
+                />
+                <span className="text-sm" style={{ color: "#93A0B8" }}>일</span>
+                <span className="text-xs ml-2 tabular" style={{ color: "#5A6478" }}>
+                  이번 기간: {formatPeriodDate(payPeriod.start)} ~ {formatPeriodDate(payPeriod.end)}
+                </span>
               </div>
             </div>
 
