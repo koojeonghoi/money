@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import {
   Upload, X, Plus, RotateCcw, Loader2, ImagePlus, Trash2, PiggyBank,
-  Home, Receipt, Wallet, Settings as SettingsIcon, ChevronUp, ChevronDown
+  Home, Receipt, Wallet, Settings as SettingsIcon, ChevronUp, ChevronDown, RefreshCw, Cloud
 } from "lucide-react";
 
 const PALETTE = [
@@ -178,43 +178,93 @@ export default function App() {
 
   const fileInputRef = useRef(null);
   const saveTimer = useRef(null);
+  const [syncSecret, setSyncSecret] = useState("");
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error | no-secret
+  const [syncSecretDraft, setSyncSecretDraft] = useState("");
 
-  // ---- load persisted data ----
+  const buildSnapshot = () => ({
+    categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income
+  });
+
+  const applySnapshot = (parsed) => {
+    if (!parsed) return;
+    if (parsed.categories?.length) setCategories(parsed.categories);
+    if (parsed.paymentMethods?.length) setPaymentMethods(parsed.paymentMethods);
+    if (parsed.assetTypes?.length) setAssetTypes(parsed.assetTypes);
+    if (parsed.categoryMemory) setCategoryMemory(parsed.categoryMemory);
+    if (parsed.transactions) setTransactions(parsed.transactions);
+    if (parsed.assets) setAssets(parsed.assets);
+    if (parsed.income) setIncome(parsed.income);
+  };
+
+  // ---- load persisted data: localStorage first (instant/offline), then cloud if a sync passcode is set ----
   useEffect(() => {
+    const storedSecret = localStorage.getItem("sync-secret") || "";
+    setSyncSecret(storedSecret);
+    setSyncSecretDraft(storedSecret);
+
     try {
       const raw = localStorage.getItem("ledger-data");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed.categories?.length) setCategories(parsed.categories);
-        if (parsed.paymentMethods?.length) setPaymentMethods(parsed.paymentMethods);
-        if (parsed.assetTypes?.length) setAssetTypes(parsed.assetTypes);
-        if (parsed.categoryMemory) setCategoryMemory(parsed.categoryMemory);
-        if (parsed.transactions) setTransactions(parsed.transactions);
-        if (parsed.assets) setAssets(parsed.assets);
-        if (parsed.income) setIncome(parsed.income);
-      }
+      if (raw) applySnapshot(JSON.parse(raw));
     } catch (e) {
       // no saved data yet — keep defaults
-    } finally {
-      setLoaded(true);
     }
+
+    if (!storedSecret) {
+      setLoaded(true);
+      return;
+    }
+
+    (async () => {
+      setSyncStatus("syncing");
+      try {
+        const res = await fetch("/api/sync", { headers: { "x-sync-secret": storedSecret } });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "동기화 실패");
+        if (json.data) applySnapshot(json.data);
+        setSyncStatus("synced");
+      } catch (e) {
+        setSyncStatus("error");
+      } finally {
+        setLoaded(true);
+      }
+    })();
   }, []);
 
-  // ---- debounced save ----
+  // ---- debounced save: always cache locally, and push to cloud if a sync passcode is set ----
   useEffect(() => {
     if (!loaded) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
+    saveTimer.current = setTimeout(async () => {
+      const snapshot = buildSnapshot();
       try {
-        localStorage.setItem("ledger-data", JSON.stringify({
-          categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income
-        }));
+        localStorage.setItem("ledger-data", JSON.stringify(snapshot));
       } catch (e) {
-        console.error("저장 실패", e);
+        console.error("로컬 저장 실패", e);
       }
-    }, 400);
+      if (!syncSecret) return;
+      setSyncStatus("syncing");
+      try {
+        const res = await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ secret: syncSecret, data: snapshot })
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "동기화 실패");
+        setSyncStatus("synced");
+      } catch (e) {
+        setSyncStatus("error");
+      }
+    }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income, loaded]);
+  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income, loaded, syncSecret]);
+
+  const saveSyncSecret = () => {
+    const trimmed = syncSecretDraft.trim();
+    localStorage.setItem("sync-secret", trimmed);
+    setSyncSecret(trimmed);
+  };
 
   // set sensible defaults for the manual-add form once categories/payment methods are loaded
   useEffect(() => {
@@ -871,6 +921,43 @@ export default function App() {
         {/* ---------------- SETTINGS ---------------- */}
         {activeTab === "settings" && (
           <div className="flex flex-col gap-5 max-w-xl">
+            {/* Cloud sync */}
+            <div className="rounded-2xl p-4" style={card}>
+              <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
+                <Cloud size={15} style={{ color: "#C9A227" }} /> 기기 간 동기화
+              </p>
+              <p className="text-xs mb-2" style={{ color: "#93A0B8" }}>
+                동기화 비밀번호를 설정하면 폰·PC 등 여러 기기에서 같은 데이터를 볼 수 있어요. 모든 기기에 똑같은 비밀번호를 입력해야 해요.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={syncSecretDraft}
+                  onChange={(e) => setSyncSecretDraft(e.target.value)}
+                  placeholder="동기화 비밀번호"
+                  className="flex-1 min-w-0 rounded-lg px-3 py-2 text-sm outline-none"
+                  style={inputStyle}
+                />
+                <button
+                  onClick={saveSyncSecret}
+                  className="flex-shrink-0 px-3 py-2 rounded-lg text-sm font-semibold"
+                  style={{ background: "#C9A227", color: "#101B2D" }}
+                >
+                  적용
+                </button>
+              </div>
+              <div className="flex items-center gap-1.5 mt-2 text-xs" style={{ color: "#93A0B8" }}>
+                {!syncSecret && <span>미설정 — 이 기기에만 저장됩니다</span>}
+                {syncSecret && syncStatus === "syncing" && (
+                  <><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> 동기화 중...</>
+                )}
+                {syncSecret && syncStatus === "synced" && <span style={{ color: "#4E8F72" }}>✓ 동기화됨</span>}
+                {syncSecret && syncStatus === "error" && (
+                  <span style={{ color: "#B5533B" }}>동기화 실패 — 서버에 Upstash Redis가 연결되어 있는지, 비밀번호가 맞는지 확인해주세요</span>
+                )}
+              </div>
+            </div>
+
             {/* Income */}
             <div className="rounded-2xl p-4" style={card}>
               <label className="text-xs font-semibold" style={{ color: "#93A0B8" }}>월 소득 (선택 — 고정비 비율 계산용)</label>
