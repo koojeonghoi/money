@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import {
   Upload, X, Plus, RotateCcw, Loader2, ImagePlus, Trash2, PiggyBank,
-  Home, Receipt, Wallet, Settings as SettingsIcon, ChevronUp, ChevronDown, RefreshCw, Cloud
+  Home, Receipt, Wallet, Settings as SettingsIcon, GripVertical, RefreshCw, Cloud
 } from "lucide-react";
 
 const PALETTE = [
@@ -51,12 +51,79 @@ const NAV_ITEMS = [
   { id: "settings", label: "설정", icon: SettingsIcon }
 ];
 
-function reorder(list, index, direction) {
-  const newIndex = index + direction;
-  if (newIndex < 0 || newIndex >= list.length) return list;
+function moveItem(list, fromIndex, toIndex) {
+  if (fromIndex === toIndex) return list;
   const next = [...list];
-  [next[index], next[newIndex]] = [next[newIndex], next[index]];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
   return next;
+}
+
+// Press-and-hold-then-drag reordering for editable lists (categories, asset types, payment methods).
+// Drag starts from a dedicated handle; the dragged row follows the pointer 1:1 while siblings
+// swap live based on which row's midpoint the pointer has crossed.
+function useDragReorder(items, setItems) {
+  const containerRef = useRef(null);
+  const dragInfo = useRef(null); // { id, startY }
+  const [dragState, setDragState] = useState(null); // { id, y }
+
+  const handlePointerDown = (id) => (e) => {
+    e.preventDefault();
+    dragInfo.current = { id, startY: e.clientY };
+    setDragState({ id, y: 0 });
+  };
+
+  useEffect(() => {
+    if (!dragState) return;
+
+    const handleMove = (e) => {
+      const { id, startY } = dragInfo.current;
+      const deltaY = e.clientY - startY;
+      setDragState({ id, y: deltaY });
+
+      const container = containerRef.current;
+      if (!container) return;
+      const rows = Array.from(container.children);
+      const currentIndex = items.findIndex((it) => it.id === id);
+      const draggedEl = rows[currentIndex];
+      if (!draggedEl) return;
+      const draggedRect = draggedEl.getBoundingClientRect();
+      const draggedCenter = draggedRect.top + draggedRect.height / 2 + deltaY;
+
+      let targetIndex = 0;
+      rows.forEach((row, idx) => {
+        if (idx === currentIndex) return;
+        const rect = row.getBoundingClientRect();
+        const center = rect.top + rect.height / 2;
+        if (center < draggedCenter) targetIndex++;
+      });
+
+      if (targetIndex !== currentIndex) {
+        setItems((prev) => moveItem(prev, currentIndex, targetIndex));
+      }
+    };
+
+    const handleUp = () => {
+      dragInfo.current = null;
+      setDragState(null);
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+    return () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+    };
+  }, [dragState, items, setItems]);
+
+  const rowStyle = (id) =>
+    dragState?.id === id
+      ? { transform: `translateY(${dragState.y}px)`, position: "relative", zIndex: 10, boxShadow: "0 6px 16px rgba(0,0,0,0.4)" }
+      : { position: "relative" };
+
+  return { containerRef, handlePointerDown, rowStyle };
 }
 
 function uid() {
@@ -296,6 +363,10 @@ export default function App() {
   const catMap = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c])), [categories]);
   const pmMap = useMemo(() => Object.fromEntries(paymentMethods.map((p) => [p.id, p])), [paymentMethods]);
   const assetTypeMap = useMemo(() => Object.fromEntries(assetTypes.map((a) => [a.id, a])), [assetTypes]);
+
+  const catDrag = useDragReorder(categories, setCategories);
+  const pmDrag = useDragReorder(paymentMethods, setPaymentMethods);
+  const assetTypeDrag = useDragReorder(assetTypes, setAssetTypes);
 
   const findCategoryByName = useCallback((name) => {
     const target = (name || "").trim().toLowerCase();
@@ -815,16 +886,15 @@ export default function App() {
             {/* Asset type manager */}
             <div className="rounded-2xl p-4" style={card}>
               <p className="text-sm font-semibold mb-2" style={{ color: "#93A0B8" }}>자산 종류 편집</p>
-              <div className="flex flex-col gap-2">
-                {assetTypes.map((at, idx) => (
-                  <div key={at.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${at.color}` }}>
-                    <div className="flex flex-col flex-shrink-0" style={{ color: "#5A6478" }}>
-                      <button onClick={() => setAssetTypes((prev) => reorder(prev, idx, -1))} disabled={idx === 0} style={{ opacity: idx === 0 ? 0.3 : 1 }}>
-                        <ChevronUp size={13} />
-                      </button>
-                      <button onClick={() => setAssetTypes((prev) => reorder(prev, idx, 1))} disabled={idx === assetTypes.length - 1} style={{ opacity: idx === assetTypes.length - 1 ? 0.3 : 1 }}>
-                        <ChevronDown size={13} />
-                      </button>
+              <div className="flex flex-col gap-2" ref={assetTypeDrag.containerRef}>
+                {assetTypes.map((at) => (
+                  <div key={at.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${at.color}`, ...assetTypeDrag.rowStyle(at.id) }}>
+                    <div
+                      onPointerDown={assetTypeDrag.handlePointerDown(at.id)}
+                      className="flex-shrink-0"
+                      style={{ color: "#5A6478", touchAction: "none", cursor: "grab" }}
+                    >
+                      <GripVertical size={16} />
                     </div>
                     {editingAssetTypeId === at.id ? (
                       <input
@@ -980,16 +1050,15 @@ export default function App() {
             {/* Category manager */}
             <div className="rounded-2xl p-4" style={card}>
               <p className="text-sm font-semibold mb-2">🏷️ 카테고리 편집 ({categories.length}개)</p>
-              <div className="flex flex-col gap-2">
-                {categories.map((cat, idx) => (
-                  <div key={cat.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${cat.color}` }}>
-                    <div className="flex flex-col flex-shrink-0" style={{ color: "#5A6478" }}>
-                      <button onClick={() => setCategories((prev) => reorder(prev, idx, -1))} disabled={idx === 0} style={{ opacity: idx === 0 ? 0.3 : 1 }}>
-                        <ChevronUp size={13} />
-                      </button>
-                      <button onClick={() => setCategories((prev) => reorder(prev, idx, 1))} disabled={idx === categories.length - 1} style={{ opacity: idx === categories.length - 1 ? 0.3 : 1 }}>
-                        <ChevronDown size={13} />
-                      </button>
+              <div className="flex flex-col gap-2" ref={catDrag.containerRef}>
+                {categories.map((cat) => (
+                  <div key={cat.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: `1.5px dashed ${cat.color}`, ...catDrag.rowStyle(cat.id) }}>
+                    <div
+                      onPointerDown={catDrag.handlePointerDown(cat.id)}
+                      className="flex-shrink-0"
+                      style={{ color: "#5A6478", touchAction: "none", cursor: "grab" }}
+                    >
+                      <GripVertical size={16} />
                     </div>
                     {editingCatId === cat.id ? (
                       <input
@@ -1037,16 +1106,15 @@ export default function App() {
             {/* Payment method manager */}
             <div className="rounded-2xl p-4" style={card}>
               <p className="text-sm font-semibold mb-2">💳 결제수단 편집 ({paymentMethods.length}개)</p>
-              <div className="flex flex-col gap-2">
-                {paymentMethods.map((pm, idx) => (
-                  <div key={pm.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: "1.5px dashed #3A4E6E" }}>
-                    <div className="flex flex-col flex-shrink-0" style={{ color: "#5A6478" }}>
-                      <button onClick={() => setPaymentMethods((prev) => reorder(prev, idx, -1))} disabled={idx === 0} style={{ opacity: idx === 0 ? 0.3 : 1 }}>
-                        <ChevronUp size={13} />
-                      </button>
-                      <button onClick={() => setPaymentMethods((prev) => reorder(prev, idx, 1))} disabled={idx === paymentMethods.length - 1} style={{ opacity: idx === paymentMethods.length - 1 ? 0.3 : 1 }}>
-                        <ChevronDown size={13} />
-                      </button>
+              <div className="flex flex-col gap-2" ref={pmDrag.containerRef}>
+                {paymentMethods.map((pm) => (
+                  <div key={pm.id} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: "#101B2D", border: "1.5px dashed #3A4E6E", ...pmDrag.rowStyle(pm.id) }}>
+                    <div
+                      onPointerDown={pmDrag.handlePointerDown(pm.id)}
+                      className="flex-shrink-0"
+                      style={{ color: "#5A6478", touchAction: "none", cursor: "grab" }}
+                    >
+                      <GripVertical size={16} />
                     </div>
                     {editingPmId === pm.id ? (
                       <input
