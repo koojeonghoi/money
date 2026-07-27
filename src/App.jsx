@@ -64,12 +64,17 @@ function moveItem(list, fromIndex, toIndex) {
 // swap live based on which row's midpoint the pointer has crossed.
 function useDragReorder(items, setItems) {
   const containerRef = useRef(null);
-  const dragInfo = useRef(null); // { id, startY }
+  const dragInfo = useRef(null); // { id, startY, startCenter }
   const [dragState, setDragState] = useState(null); // { id, y }
 
   const handlePointerDown = (id) => (e) => {
     e.preventDefault();
-    dragInfo.current = { id, startY: e.clientY };
+    const container = containerRef.current;
+    const currentIndex = items.findIndex((it) => it.id === id);
+    const rowEl = container ? container.children[currentIndex] : null;
+    const rect = rowEl ? rowEl.getBoundingClientRect() : null;
+    const startCenter = rect ? rect.top + rect.height / 2 : e.clientY;
+    dragInfo.current = { id, startY: e.clientY, startCenter };
     setDragState({ id, y: 0 });
   };
 
@@ -77,7 +82,7 @@ function useDragReorder(items, setItems) {
     if (!dragState) return;
 
     const handleMove = (e) => {
-      const { id, startY } = dragInfo.current;
+      const { id, startY, startCenter } = dragInfo.current;
       const deltaY = e.clientY - startY;
       setDragState({ id, y: deltaY });
 
@@ -85,10 +90,9 @@ function useDragReorder(items, setItems) {
       if (!container) return;
       const rows = Array.from(container.children);
       const currentIndex = items.findIndex((it) => it.id === id);
-      const draggedEl = rows[currentIndex];
-      if (!draggedEl) return;
-      const draggedRect = draggedEl.getBoundingClientRect();
-      const draggedCenter = draggedRect.top + draggedRect.height / 2 + deltaY;
+      // Use the row's original (pre-drag) center + raw pointer delta — never re-measure the
+      // dragged row itself, since its rect already includes the transform we just applied.
+      const draggedCenter = startCenter + deltaY;
 
       let targetIndex = 0;
       rows.forEach((row, idx) => {
@@ -230,6 +234,7 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showAssetBreakdown, setShowAssetBreakdown] = useState(false);
 
   const [editingCatId, setEditingCatId] = useState(null);
   const [editingPmId, setEditingPmId] = useState(null);
@@ -633,10 +638,31 @@ export default function App() {
                 </div>
               )}
 
-              <div className="rounded-2xl p-4" style={card}>
-                <p className="text-xs font-semibold mb-1" style={{ color: "#93A0B8" }}>총 자산</p>
+              <button
+                onClick={() => setShowAssetBreakdown((v) => !v)}
+                className="rounded-2xl p-4 text-left w-full"
+                style={card}
+              >
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold" style={{ color: "#93A0B8" }}>총 자산</p>
+                  <span className="text-xs" style={{ color: "#93A0B8" }}>{showAssetBreakdown ? "접기 ▲" : "내역보기 ▼"}</span>
+                </div>
                 <p className="tabular text-2xl font-bold" style={{ color: "#C9A227" }}>{won(totalAssets)}</p>
-              </div>
+                {showAssetBreakdown && (
+                  <div className="mt-3 flex flex-col gap-1.5" style={{ borderTop: "1px solid #2A3B57", paddingTop: 10 }}>
+                    {totalsByAssetType.length === 0 ? (
+                      <p className="text-xs" style={{ color: "#5A6478" }}>아직 등록된 자산이 없어요.</p>
+                    ) : (
+                      totalsByAssetType.map((a) => (
+                        <div key={a.id} className="flex items-center justify-between text-sm">
+                          <span style={{ color: a.color }}>{a.name}</span>
+                          <span className="tabular font-semibold">{won(a.total)}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </button>
 
               {(fixedRatio !== null || savingRatio !== null) && (
                 <div className="rounded-2xl p-4 flex flex-col gap-2" style={card}>
@@ -669,7 +695,7 @@ export default function App() {
                         <Pie data={pieData} dataKey="total" nameKey="name" innerRadius={50} outerRadius={85} paddingAngle={2}>
                           {pieData.map((entry) => (<Cell key={entry.id} fill={entry.color} stroke="#16233A" strokeWidth={2} />))}
                         </Pie>
-                        <Tooltip formatter={(v, n) => [won(v), n]} contentStyle={{ background: "#101B2D", border: "1px solid #2A3B57", borderRadius: 8, color: "#EDE6D3" }} />
+                        <Tooltip formatter={(v, n) => [won(v), n]} contentStyle={{ background: "#101B2D", border: "1px solid #2A3B57", borderRadius: 8, color: "#EDE6D3" }} itemStyle={{ color: "#EDE6D3" }} labelStyle={{ color: "#EDE6D3" }} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
@@ -876,9 +902,16 @@ export default function App() {
                       <Pie data={assetPieData} dataKey="total" nameKey="name" innerRadius={50} outerRadius={85} paddingAngle={2}>
                         {assetPieData.map((entry) => (<Cell key={entry.id} fill={entry.color} stroke="#16233A" strokeWidth={2} />))}
                       </Pie>
-                      <Tooltip formatter={(v, n) => [won(v), n]} contentStyle={{ background: "#101B2D", border: "1px solid #2A3B57", borderRadius: 8, color: "#EDE6D3" }} />
+                      <Tooltip formatter={(v, n) => [won(v), n]} contentStyle={{ background: "#101B2D", border: "1px solid #2A3B57", borderRadius: 8, color: "#EDE6D3" }} itemStyle={{ color: "#EDE6D3" }} labelStyle={{ color: "#EDE6D3" }} />
                     </PieChart>
                   </ResponsiveContainer>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-2 justify-center">
+                  {assetPieData.map((a) => (
+                    <span key={a.id} className="text-xs px-2 py-1 rounded-full flex items-center gap-1" style={{ background: "#101B2D", color: a.color }}>
+                      <span className="w-2 h-2 rounded-full" style={{ background: a.color }} /> {a.name} {won(a.total)}
+                    </span>
+                  ))}
                 </div>
               </div>
             )}
