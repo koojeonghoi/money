@@ -764,6 +764,19 @@ export default function App() {
     setSelectedCategoryIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
+  // flip every transaction in the selected categories to 지출(positive) or 입금(negative) at once —
+  // handy for fixing a whole category (e.g. 카드깡) that came in tagged the "wrong" way
+  const bulkSetTransactionSign = (makeExpense) => {
+    if (selectedCategoryIds.length === 0) return;
+    setTransactions((prev) =>
+      prev.map((t) => {
+        if (!selectedCategoryIds.includes(t.categoryId)) return t;
+        const abs = Math.abs(Number(t.amount || 0));
+        return { ...t, amount: makeExpense ? abs : -abs };
+      })
+    );
+  };
+
   const filteredTransactions = periodTransactions.filter((t) => {
     const matchesCategory = selectedCategoryIds.length === 0 || selectedCategoryIds.includes(t.categoryId);
     const catType = catMap[t.categoryId]?.type;
@@ -1081,6 +1094,24 @@ export default function App() {
                   <button onClick={() => setSelectedCategoryIds([])} className="text-xs" style={{ color: "#93A0B8" }}>선택 해제</button>
                 )}
               </div>
+              {selectedCategoryIds.length > 0 && (
+                <div className="flex gap-1.5 mb-2">
+                  <button
+                    onClick={() => bulkSetTransactionSign(true)}
+                    className="text-[11px] px-2.5 py-1 rounded-full font-semibold flex-1"
+                    style={{ background: "rgba(181,83,59,0.15)", color: "#B5533B", border: "1px solid #B5533B" }}
+                  >
+                    선택 카테고리 전체 지출로
+                  </button>
+                  <button
+                    onClick={() => bulkSetTransactionSign(false)}
+                    className="text-[11px] px-2.5 py-1 rounded-full font-semibold flex-1"
+                    style={{ background: "rgba(78,143,114,0.15)", color: "#4E8F72", border: "1px solid #4E8F72" }}
+                  >
+                    선택 카테고리 전체 입금으로
+                  </button>
+                </div>
+              )}
               <div className="flex gap-1.5 mb-2">
                 {[["all", "전체"], ["expense", "지출만"], ["income", "입금만"], ["saving", "저축만"]].map(([val, label]) => (
                   <button
