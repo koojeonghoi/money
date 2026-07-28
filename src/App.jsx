@@ -43,16 +43,6 @@ const DEFAULT_ASSET_TYPES = [
 
 const TYPE_LABEL = { fixed: "고정지출", variable: "변동지출", saving: "저축/자산" };
 const TYPE_ORDER = ["fixed", "variable", "saving"];
-const SAVING_KEYWORDS = /저축|적금|예금|연금|펀드|주식|채권|배당|청약/;
-
-// Re-derive a category's effective type at read time instead of trusting only the stored value —
-// this way a savings-named category always buckets correctly even if older stored data (or a
-// not-yet-updated device via sync) still has it marked "variable".
-function effectiveCategoryType(cat) {
-  if (!cat) return "variable";
-  if (cat.type === "variable" && SAVING_KEYWORDS.test(cat.name)) return "saving";
-  return cat.type;
-}
 
 const NAV_ITEMS = [
   { id: "home", label: "홈화면", icon: Home },
@@ -374,6 +364,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showAssetBreakdown, setShowAssetBreakdown] = useState(false);
+  const [expandedTypeCard, setExpandedTypeCard] = useState(null); // "fixed" | "variable" | "saving" | null
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
 
   const [editingCatId, setEditingCatId] = useState(null);
@@ -405,12 +396,7 @@ export default function App() {
 
   const applySnapshot = (parsed) => {
     if (!parsed) return;
-    if (parsed.categories?.length) {
-      const corrected = parsed.categories.map((c) =>
-        c.type === "variable" && SAVING_KEYWORDS.test(c.name) ? { ...c, type: "saving" } : c
-      );
-      setCategories(corrected);
-    }
+    if (parsed.categories?.length) setCategories(parsed.categories);
     if (parsed.paymentMethods?.length) setPaymentMethods(parsed.paymentMethods);
     if (parsed.assetTypes?.length) setAssetTypes(parsed.assetTypes);
     if (parsed.categoryMemory) setCategoryMemory(parsed.categoryMemory);
@@ -627,18 +613,7 @@ export default function App() {
 
   // ---- category CRUD ----
   const updateCategory = (id, patch) => {
-    setCategories((prev) =>
-      prev.map((c) => {
-        if (c.id !== id) return c;
-        const next = { ...c, ...patch };
-        // if the name now looks like a savings/asset category and the type was never touched
-        // from the default, nudge it to "saving" instead of leaving it under 변동지출
-        if (patch.name && c.type === "variable" && SAVING_KEYWORDS.test(patch.name)) {
-          next.type = "saving";
-        }
-        return next;
-      })
-    );
+    setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   };
   const addCategory = () => {
     const newCat = { id: uid(), name: "새 카테고리", emoji: "", color: PALETTE[categories.length % PALETTE.length], type: "variable" };
@@ -762,7 +737,7 @@ export default function App() {
       type,
       label: TYPE_LABEL[type],
       total: categories
-        .filter((c) => effectiveCategoryType(c) === type)
+        .filter((c) => c.type === type)
         .reduce((sum, c) => sum + periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0)
     }));
   }, [categories, periodTransactions]);
@@ -782,7 +757,7 @@ export default function App() {
   const fixedRatio = incomeNum > 0 ? (fixedTotal / incomeNum) * 100 : null;
   const savingRatio = incomeNum > 0 ? (savingTotal / incomeNum) * 100 : null;
 
-  const pieData = totalsByCategory.filter((c) => c.total > 0 && effectiveCategoryType(c) !== "saving");
+  const pieData = totalsByCategory.filter((c) => c.total > 0 && c.type !== "saving");
   const assetPieData = totalsByAssetType.filter((a) => a.total > 0);
 
   const toggleCategoryFilter = (id) => {
@@ -791,7 +766,7 @@ export default function App() {
 
   const filteredTransactions = periodTransactions.filter((t) => {
     const matchesCategory = selectedCategoryIds.length === 0 || selectedCategoryIds.includes(t.categoryId);
-    const catType = effectiveCategoryType(catMap[t.categoryId]);
+    const catType = catMap[t.categoryId]?.type;
     const matchesType =
       typeFilter === "all" ? true :
       typeFilter === "expense" ? (t.amount >= 0 && catType !== "saving") :
@@ -926,12 +901,40 @@ export default function App() {
             <div className="lg:col-span-3 flex flex-col gap-5">
               <div className="grid grid-cols-3 gap-3">
                 {totalsByType.map((t) => (
-                  <div key={t.type} className="rounded-2xl p-3 text-center overflow-hidden" style={card}>
+                  <button
+                    key={t.type}
+                    onClick={() => setExpandedTypeCard((cur) => (cur === t.type ? null : t.type))}
+                    className="rounded-2xl p-3 text-center overflow-hidden text-left"
+                    style={{ ...card, outline: expandedTypeCard === t.type ? "1px solid #C9A227" : "none" }}
+                  >
                     <p className="text-xs truncate" style={{ color: "#93A0B8" }}>{t.label}</p>
                     <p className="tabular text-sm sm:text-base md:text-lg font-bold mt-1 whitespace-nowrap" style={{ color: "#C9A227" }}>{won(t.total)}</p>
-                  </div>
+                  </button>
                 ))}
               </div>
+
+              {expandedTypeCard && (
+                <div className="rounded-2xl p-4" style={card}>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-semibold" style={{ color: "#93A0B8" }}>{TYPE_LABEL[expandedTypeCard]}에 포함된 카테고리</p>
+                    <button onClick={() => setExpandedTypeCard(null)} className="text-xs" style={{ color: "#93A0B8" }}>닫기</button>
+                  </div>
+                  {totalsByCategory.filter((c) => c.type === expandedTypeCard).length === 0 ? (
+                    <p className="text-xs" style={{ color: "#5A6478" }}>이 기간엔 해당 항목이 없어요.</p>
+                  ) : (
+                    <div className="flex flex-col gap-1.5">
+                      {totalsByCategory
+                        .filter((c) => c.type === expandedTypeCard)
+                        .map((c) => (
+                          <div key={c.id} className="flex items-center justify-between text-sm">
+                            <span style={{ color: c.color }}>{labelWithEmoji(c)}</span>
+                            <span className="tabular font-semibold">{won(c.total)}</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {pieData.length > 0 && (
                 <div className="rounded-2xl p-4" style={card}>
