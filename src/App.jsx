@@ -11,6 +11,8 @@ const PALETTE = [
 ];
 
 const DEFAULT_CATEGORIES = [
+  { id: "salary", name: "급여", emoji: "💵", color: "#C9A227", type: "income" },
+  { id: "bonus", name: "상여금", emoji: "🎁", color: "#D9B23C", type: "income" },
   { id: "saving", name: "저축", emoji: "💰", color: "#4E8F72", type: "saving" },
   { id: "installment", name: "적금", emoji: "🏦", color: "#5B8A72", type: "saving" },
   { id: "insurance", name: "보험", emoji: "🛡️", color: "#6B8CAE", type: "fixed" },
@@ -41,8 +43,8 @@ const DEFAULT_ASSET_TYPES = [
   { id: "etc-asset", name: "기타자산", color: "#8A93A3" }
 ];
 
-const TYPE_LABEL = { fixed: "고정지출", variable: "변동지출", saving: "저축/자산" };
-const TYPE_ORDER = ["fixed", "variable", "saving"];
+const TYPE_LABEL = { income: "수입", fixed: "고정지출", variable: "변동지출", saving: "저축/자산" };
+const TYPE_ORDER = ["income", "fixed", "variable", "saving"];
 
 const NAV_ITEMS = [
   { id: "home", label: "홈화면", icon: Home },
@@ -728,18 +730,20 @@ export default function App() {
 
   const totalsByCategory = useMemo(() => {
     return categories
-      .map((c) => ({ ...c, total: periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0) }))
+      .map((c) => {
+        const raw = periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0);
+        return { ...c, total: c.type === "income" ? Math.abs(raw) : raw };
+      })
       .filter((c) => c.total !== 0);
   }, [categories, periodTransactions]);
 
   const totalsByType = useMemo(() => {
-    return TYPE_ORDER.map((type) => ({
-      type,
-      label: TYPE_LABEL[type],
-      total: categories
+    return TYPE_ORDER.map((type) => {
+      const raw = categories
         .filter((c) => c.type === type)
-        .reduce((sum, c) => sum + periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0)
-    }));
+        .reduce((sum, c) => sum + periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0);
+      return { type, label: TYPE_LABEL[type], total: type === "income" ? Math.abs(raw) : raw };
+    });
   }, [categories, periodTransactions]);
 
   const totalsByAssetType = useMemo(() => {
@@ -751,13 +755,14 @@ export default function App() {
   const grandTotal = periodTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const totalAssets = assets.reduce((s, a) => s + Number(a.amount || 0), 0);
   const selectedAssetsTotal = assets.filter((a) => selectedAssetIds.includes(a.id)).reduce((s, a) => s + Number(a.amount || 0), 0);
-  const incomeNum = Number(income) || 0;
+  const actualIncomeTotal = totalsByType.find((t) => t.type === "income")?.total || 0;
+  const incomeNum = Number(income) || actualIncomeTotal;
   const fixedTotal = totalsByType.find((t) => t.type === "fixed")?.total || 0;
   const savingTotal = totalsByType.find((t) => t.type === "saving")?.total || 0;
   const fixedRatio = incomeNum > 0 ? (fixedTotal / incomeNum) * 100 : null;
   const savingRatio = incomeNum > 0 ? (savingTotal / incomeNum) * 100 : null;
 
-  const pieData = totalsByCategory.filter((c) => c.total > 0 && c.type !== "saving");
+  const pieData = totalsByCategory.filter((c) => c.total > 0 && c.type !== "saving" && c.type !== "income");
   const assetPieData = totalsByAssetType.filter((a) => a.total > 0);
 
   const toggleCategoryFilter = (id) => {
@@ -912,7 +917,7 @@ export default function App() {
             </div>
 
             <div className="lg:col-span-3 flex flex-col gap-5">
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 {totalsByType.map((t) => (
                   <button
                     key={t.type}
@@ -1058,14 +1063,24 @@ export default function App() {
                 />
                 <div className="flex rounded-lg overflow-hidden flex-shrink-0" style={{ border: "1px solid #2A3B57" }}>
                   <button
-                    onClick={() => setManualIsIncome(false)}
+                    onClick={() => {
+                      setManualIsIncome(false);
+                      if (catMap[manualCatId]?.type === "income") {
+                        setManualCatId(categories.find((c) => c.type !== "income")?.id || categories[0]?.id);
+                      }
+                    }}
                     className="px-2.5 py-2 text-xs font-semibold"
                     style={{ background: !manualIsIncome ? "rgba(181,83,59,0.2)" : "transparent", color: !manualIsIncome ? "#B5533B" : "#93A0B8" }}
                   >
                     지출
                   </button>
                   <button
-                    onClick={() => setManualIsIncome(true)}
+                    onClick={() => {
+                      setManualIsIncome(true);
+                      if (catMap[manualCatId]?.type !== "income") {
+                        setManualCatId(categories.find((c) => c.type === "income")?.id || manualCatId);
+                      }
+                    }}
                     className="px-2.5 py-2 text-xs font-semibold"
                     style={{ background: manualIsIncome ? "rgba(78,143,114,0.2)" : "transparent", color: manualIsIncome ? "#4E8F72" : "#93A0B8" }}
                   >
@@ -1428,13 +1443,13 @@ export default function App() {
 
             {/* Income */}
             <div className="rounded-2xl p-4" style={card}>
-              <label className="text-xs font-semibold" style={{ color: "#93A0B8" }}>월 소득 (선택 — 고정비 비율 계산용)</label>
+              <label className="text-xs font-semibold" style={{ color: "#93A0B8" }}>월 소득 (선택 — 비워두면 이 기간 급여/상여금 내역 합계를 자동으로 사용해요)</label>
               <div className="flex items-center gap-2 mt-1.5">
                 <input
                   type="number"
                   value={income}
                   onChange={(e) => setIncome(e.target.value)}
-                  placeholder="예: 3500000"
+                  placeholder={actualIncomeTotal > 0 ? `자동 계산: ${actualIncomeTotal.toLocaleString("ko-KR")}` : "예: 3500000"}
                   className="tabular flex-1 rounded-lg px-3 py-2 text-sm outline-none"
                   style={inputStyle}
                 />
@@ -1497,6 +1512,7 @@ export default function App() {
                       className="text-xs rounded-md px-1.5 py-1 outline-none flex-shrink-0"
                       style={{ background: "#16233A", border: "1px solid #2A3B57", color: "#EDE6D3" }}
                     >
+                      <option value="income">수입</option>
                       <option value="fixed">고정</option>
                       <option value="variable">변동</option>
                       <option value="saving">저축</option>
