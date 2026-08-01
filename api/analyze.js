@@ -36,7 +36,7 @@ export default async function handler(req, res) {
 - payment는 이미지에 카드명/결제수단이 보이면 주어진 목록 중 가장 가까운 것으로, 안 보이면 "미지정"으로.
 - 텍스트를 읽을 수 없는 이미지면 빈 배열 []을 출력해.${hintsText}`;
 
-  const model = "gemini-3.6-flash";
+  const model = "gemini-3.1-flash-lite";
 
   try {
     const response = await fetch(
