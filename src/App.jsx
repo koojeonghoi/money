@@ -360,6 +360,7 @@ export default function App() {
 
   const [transactions, setTransactions] = useState([]);
   const [assets, setAssets] = useState([]);
+  const [transfers, setTransfers] = useState([]);
   const [income, setIncome] = useState("");
 
   const [loaded, setLoaded] = useState(false);
@@ -368,6 +369,7 @@ export default function App() {
   const [showAssetBreakdown, setShowAssetBreakdown] = useState(false);
   const [expandedTypeCard, setExpandedTypeCard] = useState(null); // "fixed" | "variable" | "saving" | null
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
+  const [assetSearch, setAssetSearch] = useState("");
 
   const [editingCatId, setEditingCatId] = useState(null);
   const [editingPmId, setEditingPmId] = useState(null);
@@ -384,8 +386,16 @@ export default function App() {
   const [manualIsIncome, setManualIsIncome] = useState(false);
   const [manualCatId, setManualCatId] = useState("");
   const [manualPmId, setManualPmId] = useState("");
+  const [manualAssetTypeId, setManualAssetTypeId] = useState("");
   const [manualAssetId, setManualAssetId] = useState("");
   const [expandedAssetHistoryId, setExpandedAssetHistoryId] = useState(null);
+  const [txAssetTypeFilter, setTxAssetTypeFilter] = useState({}); // txId -> assetTypeId being browsed in the ledger row
+
+  const [transferDate, setTransferDate] = useState(todayStr());
+  const [transferFromId, setTransferFromId] = useState("");
+  const [transferToId, setTransferToId] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
+  const [transferMemo, setTransferMemo] = useState("");
 
   const fileInputRef = useRef(null);
   const saveTimer = useRef(null);
@@ -395,7 +405,7 @@ export default function App() {
   const [syncErrorMessage, setSyncErrorMessage] = useState("");
 
   const buildSnapshot = () => ({
-    categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income, paydayDom
+    categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, transfers, income, paydayDom
   });
 
   const applySnapshot = (parsed) => {
@@ -406,6 +416,7 @@ export default function App() {
     if (parsed.categoryMemory) setCategoryMemory(parsed.categoryMemory);
     if (parsed.transactions) setTransactions(parsed.transactions);
     if (parsed.assets) setAssets(parsed.assets);
+    if (parsed.transfers) setTransfers(parsed.transfers);
     if (parsed.income) setIncome(parsed.income);
     if (parsed.paydayDom) setPaydayDom(parsed.paydayDom);
   };
@@ -473,7 +484,7 @@ export default function App() {
       }
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, income, paydayDom, loaded, syncSecret]);
+  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, transfers, income, paydayDom, loaded, syncSecret]);
 
   const saveSyncSecret = async () => {
     const trimmed = syncSecretDraft.trim();
@@ -497,12 +508,13 @@ export default function App() {
         !!d && (
           (d.transactions?.length || 0) > 0 ||
           (d.assets?.length || 0) > 0 ||
+          (d.transfers?.length || 0) > 0 ||
           (d.categories?.length || 0) > 0 ||
           (d.paymentMethods?.length || 0) > 0 ||
           (d.assetTypes?.length || 0) > 0 ||
           !!d.income
         );
-      const hasLocalData = isMeaningful({ transactions, assets, categories, paymentMethods, assetTypes, income });
+      const hasLocalData = isMeaningful({ transactions, assets, transfers, categories, paymentMethods, assetTypes, income });
       const hasCloudData = isMeaningful(json.data);
 
       if (hasCloudData) {
@@ -556,6 +568,7 @@ export default function App() {
   const catMap = useMemo(() => Object.fromEntries(categories.map((c) => [c.id, c])), [categories]);
   const pmMap = useMemo(() => Object.fromEntries(paymentMethods.map((p) => [p.id, p])), [paymentMethods]);
   const assetTypeMap = useMemo(() => Object.fromEntries(assetTypes.map((a) => [a.id, a])), [assetTypes]);
+  const assetMap = useMemo(() => Object.fromEntries(assets.map((a) => [a.id, a])), [assets]);
 
   const catDrag = useDragReorder(categories, setCategories);
   const pmDrag = useDragReorder(paymentMethods, setPaymentMethods);
@@ -685,6 +698,13 @@ export default function App() {
     setAssetTypes((prev) => prev.filter((a) => a.id !== id));
     if (removedAssetIds.size) {
       setTransactions((prev) => prev.map((t) => (removedAssetIds.has(t.assetId) ? { ...t, assetId: "" } : t)));
+      setTransfers((prev) =>
+        prev.map((tr) => ({
+          ...tr,
+          fromAssetId: removedAssetIds.has(tr.fromAssetId) ? "" : tr.fromAssetId,
+          toAssetId: removedAssetIds.has(tr.toAssetId) ? "" : tr.toAssetId
+        }))
+      );
     }
   };
 
@@ -698,10 +718,36 @@ export default function App() {
     setAssets((prev) => prev.filter((a) => a.id !== id));
     setSelectedAssetIds((prev) => prev.filter((x) => x !== id));
     setTransactions((prev) => prev.map((t) => (t.assetId === id ? { ...t, assetId: "" } : t)));
+    setTransfers((prev) =>
+      prev.map((tr) => ({
+        ...tr,
+        fromAssetId: tr.fromAssetId === id ? "" : tr.fromAssetId,
+        toAssetId: tr.toAssetId === id ? "" : tr.toAssetId
+      }))
+    );
   };
   const toggleAssetSelection = (id) => {
     setSelectedAssetIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
+
+  // ---- transfer CRUD (계좌 간 이체: 보내는 자산은 차감, 받는 자산은 증액) ----
+  const addTransfer = () => {
+    const absAmount = Number(String(transferAmount).replace(/[^0-9]/g, "")) || 0;
+    if (absAmount === 0 || !transferFromId || !transferToId || transferFromId === transferToId) return;
+    const newTransfer = {
+      id: uid(),
+      date: transferDate || todayStr(),
+      fromAssetId: transferFromId,
+      toAssetId: transferToId,
+      amount: absAmount,
+      memo: transferMemo.trim()
+    };
+    setTransfers((prev) => [newTransfer, ...prev]);
+    setTransferAmount("");
+    setTransferMemo("");
+    setTransferDate(todayStr());
+  };
+  const deleteTransfer = (id) => setTransfers((prev) => prev.filter((tr) => tr.id !== id));
 
   // ---- transaction CRUD ----
   const updateTx = (id, patch) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -769,13 +815,28 @@ export default function App() {
     });
   }, [categories, periodTransactions]);
 
-  // ---- asset balances: 자산의 "기준 금액"에 그 자산으로 연결된 수입/지출 거래를 누적 반영한 실제 잔액 ----
+  // ---- asset balances: 자산의 "기준 금액"에 그 자산으로 연결된 수입/지출 거래 + 계좌 이체를 누적 반영한 실제 잔액 ----
   // 거래 amount는 지출이면 양수, 입금이면 음수이므로 자산 잔액에는 -amount 만큼 더한다.
+  // 이체는 보내는 자산에서 -amount, 받는 자산에서 +amount로 반영한다.
   const assetHistoryMap = useMemo(() => {
+    const legsByAsset = {};
+    const pushLeg = (assetId, leg) => {
+      if (!assetId) return;
+      if (!legsByAsset[assetId]) legsByAsset[assetId] = [];
+      legsByAsset[assetId].push(leg);
+    };
+    transactions.forEach((t) => {
+      if (!t.assetId) return;
+      pushLeg(t.assetId, { id: t.id, date: t.date, description: t.description, delta: -Number(t.amount || 0), kind: "tx" });
+    });
+    transfers.forEach((tr) => {
+      pushLeg(tr.fromAssetId, { id: `${tr.id}-out`, date: tr.date, description: tr.memo || `${assetMap[tr.toAssetId]?.name || "다른 자산"}(으)로 이체`, delta: -Number(tr.amount || 0), kind: "transfer-out" });
+      pushLeg(tr.toAssetId, { id: `${tr.id}-in`, date: tr.date, description: tr.memo || `${assetMap[tr.fromAssetId]?.name || "다른 자산"}에서 이체`, delta: Number(tr.amount || 0), kind: "transfer-in" });
+    });
+
     const map = {};
     assets.forEach((a) => {
-      const linked = transactions
-        .filter((t) => t.assetId === a.id)
+      const linked = (legsByAsset[a.id] || [])
         .slice()
         .sort((x, y) => {
           const dx = parseTxDate(x.date) || new Date(0);
@@ -783,14 +844,13 @@ export default function App() {
           return dx - dy;
         });
       let running = Number(a.amount || 0);
-      map[a.id] = linked.map((t) => {
-        const delta = -Number(t.amount || 0);
-        running += delta;
-        return { ...t, delta, running };
+      map[a.id] = linked.map((leg) => {
+        running += leg.delta;
+        return { ...leg, running };
       });
     });
     return map;
-  }, [assets, transactions]);
+  }, [assets, transactions, transfers, assetMap]);
 
   const assetBalances = useMemo(() => {
     const map = {};
@@ -806,6 +866,21 @@ export default function App() {
       .map((a) => ({ ...a, total: assets.filter((x) => x.assetTypeId === a.id).reduce((s, x) => s + (assetBalances[x.id] ?? Number(x.amount || 0)), 0) }))
       .filter((a) => a.total !== 0);
   }, [assetTypes, assets, assetBalances]);
+
+  // 자산 목록: 검색어로 좁히고, 자산 종류(등록 순서) → 이름(가나다/ABC) 순으로 정렬
+  const sortedFilteredAssets = useMemo(() => {
+    const typeOrder = Object.fromEntries(assetTypes.map((t, i) => [t.id, i]));
+    const q = assetSearch.trim().toLowerCase();
+    return assets
+      .filter((a) => !q || a.name.toLowerCase().includes(q))
+      .slice()
+      .sort((a, b) => {
+        const ta = typeOrder[a.assetTypeId] ?? 999;
+        const tb = typeOrder[b.assetTypeId] ?? 999;
+        if (ta !== tb) return ta - tb;
+        return a.name.localeCompare(b.name, "ko");
+      });
+  }, [assets, assetTypes, assetSearch]);
 
   const grandTotal = periodTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const totalAssets = assets.reduce((s, a) => s + (assetBalances[a.id] ?? Number(a.amount || 0)), 0);
@@ -1155,10 +1230,24 @@ export default function App() {
                 </button>
               </div>
               <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-xs" style={{ color: "#5A6478" }}>반영할 자산</span>
+                <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>반영할 자산</span>
+                <select
+                  value={manualAssetTypeId}
+                  onChange={(e) => {
+                    setManualAssetTypeId(e.target.value);
+                    if (manualAssetId && assetMap[manualAssetId]?.assetTypeId !== e.target.value && e.target.value) {
+                      setManualAssetId("");
+                    }
+                  }}
+                  className="rounded-lg px-2 py-2 text-sm outline-none flex-shrink-0 w-[110px]"
+                  style={inputStyle}
+                >
+                  <option value="">종류 전체</option>
+                  {assetTypes.map((t) => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                </select>
                 <select value={manualAssetId} onChange={(e) => setManualAssetId(e.target.value)} className="flex-1 min-w-[140px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
                   <option value="">연결 안 함</option>
-                  {assets.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                  {assets.filter((a) => !manualAssetTypeId || a.assetTypeId === manualAssetTypeId).map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
                 </select>
               </div>
             </div>
@@ -1300,13 +1389,33 @@ export default function App() {
                             {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
                           </select>
                           <select
+                            value={txAssetTypeFilter[t.id] ?? (assetMap[t.assetId]?.assetTypeId || "")}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setTxAssetTypeFilter((prev) => ({ ...prev, [t.id]: val }));
+                              if (t.assetId && assetMap[t.assetId]?.assetTypeId !== val && val) {
+                                updateTx(t.id, { assetId: "" });
+                              }
+                            }}
+                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 w-[74px]"
+                            style={{ background: "transparent", border: "1px solid #2A3B57", color: "#93A0B8" }}
+                          >
+                            <option value="">종류 전체</option>
+                            {assetTypes.map((at) => (<option key={at.id} value={at.id}>{at.name}</option>))}
+                          </select>
+                          <select
                             value={t.assetId || ""}
                             onChange={(e) => updateTx(t.id, { assetId: e.target.value })}
                             className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0"
                             style={{ background: "transparent", border: "1px solid #2A3B57", color: t.assetId ? "#C9A227" : "#5A6478" }}
                           >
                             <option value="">자산 연결 안 함</option>
-                            {assets.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                            {assets
+                              .filter((a) => {
+                                const typeFilter = txAssetTypeFilter[t.id] ?? (assetMap[t.assetId]?.assetTypeId || "");
+                                return !typeFilter || a.assetTypeId === typeFilter;
+                              })
+                              .map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
                           </select>
                         </div>
                       </div>
@@ -1401,6 +1510,16 @@ export default function App() {
                   <Plus size={12} /> 자산 추가
                 </button>
               </div>
+              <div className="px-4 pb-2">
+                <input
+                  type="text"
+                  value={assetSearch}
+                  onChange={(e) => setAssetSearch(e.target.value)}
+                  placeholder="자산 이름 검색"
+                  className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+                  style={inputStyle}
+                />
+              </div>
               {selectedAssetIds.length > 0 && (
                 <div className="mx-4 mb-2 rounded-xl px-3 py-2 flex items-center justify-between" style={{ background: "#101B2D", border: "1px solid #C9A227" }}>
                   <span className="text-xs" style={{ color: "#93A0B8" }}>{selectedAssetIds.length}개 선택됨</span>
@@ -1412,9 +1531,13 @@ export default function App() {
                 <div className="px-4 pb-6 pt-2 text-sm text-center" style={{ color: "#5A6478" }}>
                   아직 등록된 자산이 없어요. "자산 추가"로 시작하세요.
                 </div>
+              ) : sortedFilteredAssets.length === 0 ? (
+                <div className="px-4 pb-6 pt-2 text-sm text-center" style={{ color: "#5A6478" }}>
+                  검색 결과가 없어요.
+                </div>
               ) : (
                 <div className="pb-1">
-                  {assets.map((a) => {
+                  {sortedFilteredAssets.map((a) => {
                     const at = assetTypeMap[a.assetTypeId];
                     const selected = selectedAssetIds.includes(a.id);
                     const history = assetHistoryMap[a.id] || [];
@@ -1508,6 +1631,100 @@ export default function App() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </div>
+
+            {/* Account-to-account transfer */}
+            <div className="rounded-2xl p-4 flex flex-col gap-2.5" style={card}>
+              <p className="text-sm font-semibold" style={{ color: "#93A0B8" }}>계좌 이체 (한 자산 → 다른 자산)</p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="date"
+                  value={transferDate}
+                  onChange={(e) => setTransferDate(e.target.value)}
+                  className="tabular rounded-lg px-2 py-2 text-sm outline-none"
+                  style={inputStyle}
+                />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="이체 금액"
+                  value={transferAmount}
+                  onChange={(e) => setTransferAmount(e.target.value.replace(/[^0-9]/g, ""))}
+                  className="tabular flex-1 min-w-[100px] rounded-lg px-3 py-2 text-sm text-right outline-none"
+                  style={inputStyle}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs flex-shrink-0 w-10" style={{ color: "#5A6478" }}>보내는</span>
+                <select value={transferFromId} onChange={(e) => setTransferFromId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                  <option value="">자산 선택</option>
+                  {assetTypes.map((at) => {
+                    const opts = assets.filter((a) => a.assetTypeId === at.id).slice().sort((x, y) => x.name.localeCompare(y.name, "ko"));
+                    if (!opts.length) return null;
+                    return (
+                      <optgroup key={at.id} label={at.name}>
+                        {opts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs flex-shrink-0 w-10" style={{ color: "#5A6478" }}>받는</span>
+                <select value={transferToId} onChange={(e) => setTransferToId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                  <option value="">자산 선택</option>
+                  {assetTypes.map((at) => {
+                    const opts = assets.filter((a) => a.assetTypeId === at.id).slice().sort((x, y) => x.name.localeCompare(y.name, "ko"));
+                    if (!opts.length) return null;
+                    return (
+                      <optgroup key={at.id} label={at.name}>
+                        {opts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  placeholder="메모 (선택)"
+                  value={transferMemo}
+                  onChange={(e) => setTransferMemo(e.target.value)}
+                  className="flex-1 min-w-[120px] rounded-lg px-3 py-2 text-sm outline-none"
+                  style={inputStyle}
+                />
+                <button
+                  onClick={addTransfer}
+                  disabled={!transferFromId || !transferToId || transferFromId === transferToId || !transferAmount}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-1 disabled:opacity-40"
+                  style={{ background: "#C9A227", color: "#101B2D" }}
+                >
+                  <Plus size={14} /> 이체
+                </button>
+              </div>
+              {transferFromId && transferFromId === transferToId && (
+                <p className="text-xs" style={{ color: "#B5533B" }}>보내는 자산과 받는 자산은 다르게 선택해 주세요.</p>
+              )}
+              {transfers.length > 0 && (
+                <div className="mt-1 rounded-lg overflow-hidden" style={{ background: "#101B2D", border: "1px solid #2A3B57" }}>
+                  {transfers.slice(0, 8).map((tr) => (
+                    <div key={tr.id} className="flex items-center justify-between px-3 py-2 text-xs" style={{ borderBottom: "1px solid #1e293b" }}>
+                      <div className="min-w-0">
+                        <p className="truncate" style={{ color: "#EDE6D3" }}>
+                          {assetMap[tr.fromAssetId]?.name || "삭제된 자산"} → {assetMap[tr.toAssetId]?.name || "삭제된 자산"}
+                        </p>
+                        <p style={{ color: "#5A6478" }}>{tr.date}{tr.memo ? ` · ${tr.memo}` : ""}</p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="tabular font-semibold" style={{ color: "#C9A227" }}>{won(tr.amount)}</span>
+                        <button onClick={() => deleteTransfer(tr.id)} style={{ color: "#5A6478" }}>
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
