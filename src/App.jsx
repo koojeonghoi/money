@@ -328,11 +328,11 @@ async function prepareImageForUpload(file) {
   return { base64, mediaType: "image/jpeg" };
 }
 
-async function extractTransactions(base64, mediaType, categoryNames, paymentMethodNames, merchantHints) {
+async function extractTransactions(base64, mediaType, categoryNames, paymentMethodNames, merchantHints, assetNames) {
   const response = await fetch("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image: base64, mediaType, categories: categoryNames, paymentMethods: paymentMethodNames, merchantHints })
+    body: JSON.stringify({ image: base64, mediaType, categories: categoryNames, paymentMethods: paymentMethodNames, merchantHints, assetNames })
   });
 
   let data;
@@ -583,6 +583,17 @@ export default function App() {
     return paymentMethods.find((p) => p.name.trim().toLowerCase() === target);
   }, [paymentMethods]);
 
+  const findAssetByName = useCallback((name) => {
+    const target = (name || "").trim().toLowerCase();
+    if (!target) return null;
+    const exact = assets.find((a) => a.name.trim().toLowerCase() === target);
+    if (exact) return exact;
+    return assets.find((a) => {
+      const n = a.name.trim().toLowerCase();
+      return n && (n.includes(target) || target.includes(n));
+    }) || null;
+  }, [assets]);
+
   const processImageFile = useCallback(async (file) => {
     setError("");
     setLoading(true);
@@ -590,21 +601,52 @@ export default function App() {
       const { base64, mediaType } = await prepareImageForUpload(file);
       const categoryNames = categories.map((c) => c.name);
       const paymentMethodNames = paymentMethods.map((p) => p.name);
+      const assetNames = assets.map((a) => a.name);
       const merchantHints = Object.entries(categoryMemory)
         .slice(-40)
         .map(([merchant, categoryId]) => ({ merchant, category: catMap[categoryId]?.name }))
         .filter((h) => h.category);
-      const rows = await extractTransactions(base64, mediaType, categoryNames, paymentMethodNames, merchantHints);
+      const rows = await extractTransactions(base64, mediaType, categoryNames, paymentMethodNames, merchantHints, assetNames);
       if (rows.length === 0) {
         setError("이미지에서 거래 내역을 찾지 못했어요. 더 선명한 캡처로 다시 시도해 주세요.");
       } else {
         const uncategorized = categories.find((c) => c.id === "uncategorized")?.id || categories[0].id;
         const unassignedPm = paymentMethods.find((p) => p.id === "unassigned")?.id || paymentMethods[0].id;
-        const newTx = rows.map((r) => {
+        const transferPm = paymentMethods.find((p) => p.id === "transfer")?.id || unassignedPm;
+        const newTx = [];
+        const newTransfers = [];
+        rows.forEach((r) => {
+          if (r.type === "transfer") {
+            const fromAsset = findAssetByName(r.fromAsset);
+            const toAsset = findAssetByName(r.toAsset);
+            if (fromAsset && toAsset && fromAsset.id !== toAsset.id) {
+              newTransfers.push({
+                id: uid(),
+                date: r.date || todayStr(),
+                fromAssetId: fromAsset.id,
+                toAssetId: toAsset.id,
+                amount: Math.abs(Number(r.amount) || 0),
+                memo: r.description || ""
+              });
+              return;
+            }
+            // 이체로 보이지만 두 계좌를 자산 목록에서 못 찾았으면, 데이터가 사라지지 않도록
+            // "계좌이체" 결제수단이 붙은 일반 거래로 남겨서 나중에 직접 자산을 연결할 수 있게 한다.
+            newTx.push({
+              id: uid(),
+              date: r.date || todayStr(),
+              description: r.description || `이체${r.fromAsset ? ` (${r.fromAsset} → ${r.toAsset || "?"})` : ""}`,
+              amount: Math.abs(Number(r.amount) || 0),
+              categoryId: uncategorized,
+              paymentMethodId: transferPm,
+              assetId: fromAsset ? fromAsset.id : ""
+            });
+            return;
+          }
           const remembered = recallCategory(r.description);
           const matchedCat = remembered ? categories.find((c) => c.id === remembered) : findCategoryByName(r.category);
           const matchedPm = findPaymentMethodByName(r.payment);
-          return {
+          newTx.push({
             id: uid(),
             date: r.date || todayStr(),
             description: r.description || "내역 없음",
@@ -612,16 +654,17 @@ export default function App() {
             categoryId: matchedCat ? matchedCat.id : uncategorized,
             paymentMethodId: matchedPm ? matchedPm.id : unassignedPm,
             assetId: ""
-          };
+          });
         });
-        setTransactions((prev) => [...newTx, ...prev]);
+        if (newTx.length) setTransactions((prev) => [...newTx, ...prev]);
+        if (newTransfers.length) setTransfers((prev) => [...newTransfers, ...prev]);
       }
     } catch (e) {
       setError(e.message || "이미지를 분석하는 중 문제가 발생했어요. 다시 시도해 주세요.");
     } finally {
       setLoading(false);
     }
-  }, [categories, paymentMethods, categoryMemory, catMap, findCategoryByName, findPaymentMethodByName, recallCategory]);
+  }, [categories, paymentMethods, assets, categoryMemory, catMap, findCategoryByName, findPaymentMethodByName, findAssetByName, recallCategory]);
 
   const handlePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
