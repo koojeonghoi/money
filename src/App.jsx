@@ -389,7 +389,6 @@ export default function App() {
   const [manualAssetTypeId, setManualAssetTypeId] = useState("");
   const [manualAssetId, setManualAssetId] = useState("");
   const [expandedAssetHistoryId, setExpandedAssetHistoryId] = useState(null);
-  const [txAssetTypeFilter, setTxAssetTypeFilter] = useState({}); // txId -> assetTypeId being browsed in the ledger row
 
   const [transferDate, setTransferDate] = useState(todayStr());
   const [transferFromId, setTransferFromId] = useState("");
@@ -1377,45 +1376,33 @@ export default function App() {
                             type="date"
                             value={t.date}
                             onChange={(e) => updateTx(t.id, { date: e.target.value })}
-                            className="tabular bg-transparent outline-none text-xs"
+                            className="tabular bg-transparent outline-none text-xs flex-shrink-0"
                             style={{ color: "#5A6478" }}
                           />
                           <select
                             value={t.paymentMethodId || "unassigned"}
                             onChange={(e) => updateTx(t.id, { paymentMethodId: e.target.value })}
-                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0"
+                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[100px]"
                             style={{ background: "transparent", border: "1px solid #2A3B57", color: "#93A0B8" }}
                           >
                             {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
                           </select>
                           <select
-                            value={txAssetTypeFilter[t.id] ?? (assetMap[t.assetId]?.assetTypeId || "")}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setTxAssetTypeFilter((prev) => ({ ...prev, [t.id]: val }));
-                              if (t.assetId && assetMap[t.assetId]?.assetTypeId !== val && val) {
-                                updateTx(t.id, { assetId: "" });
-                              }
-                            }}
-                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 w-[74px]"
-                            style={{ background: "transparent", border: "1px solid #2A3B57", color: "#93A0B8" }}
-                          >
-                            <option value="">종류 전체</option>
-                            {assetTypes.map((at) => (<option key={at.id} value={at.id}>{at.name}</option>))}
-                          </select>
-                          <select
                             value={t.assetId || ""}
                             onChange={(e) => updateTx(t.id, { assetId: e.target.value })}
-                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0"
+                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[110px]"
                             style={{ background: "transparent", border: "1px solid #2A3B57", color: t.assetId ? "#C9A227" : "#5A6478" }}
                           >
                             <option value="">자산 연결 안 함</option>
-                            {assets
-                              .filter((a) => {
-                                const typeFilter = txAssetTypeFilter[t.id] ?? (assetMap[t.assetId]?.assetTypeId || "");
-                                return !typeFilter || a.assetTypeId === typeFilter;
-                              })
-                              .map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                            {assetTypes.map((at) => {
+                              const opts = assets.filter((a) => a.assetTypeId === at.id);
+                              if (!opts.length) return null;
+                              return (
+                                <optgroup key={at.id} label={at.name}>
+                                  {opts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                                </optgroup>
+                              );
+                            })}
                           </select>
                         </div>
                       </div>
