@@ -866,20 +866,22 @@ export default function App() {
       .filter((a) => a.total !== 0);
   }, [assetTypes, assets, assetBalances]);
 
-  // 자산 목록: 검색어로 좁히고, 자산 종류(등록 순서) → 이름(가나다/ABC) 순으로 정렬
-  const sortedFilteredAssets = useMemo(() => {
+  // 자산 정렬: 자산 종류(자산 종류 편집에 나열된 순서) → 이름(가나다/ABC) 순으로 항상 자동 정렬.
+  // 자산 목록 카드, 드롭다운 등 자산이 나열되는 모든 곳에서 이 순서를 그대로 사용한다.
+  const sortedAssets = useMemo(() => {
     const typeOrder = Object.fromEntries(assetTypes.map((t, i) => [t.id, i]));
+    return assets.slice().sort((a, b) => {
+      const ta = typeOrder[a.assetTypeId] ?? 999;
+      const tb = typeOrder[b.assetTypeId] ?? 999;
+      if (ta !== tb) return ta - tb;
+      return a.name.localeCompare(b.name, "ko");
+    });
+  }, [assets, assetTypes]);
+
+  const sortedFilteredAssets = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
-    return assets
-      .filter((a) => !q || a.name.toLowerCase().includes(q))
-      .slice()
-      .sort((a, b) => {
-        const ta = typeOrder[a.assetTypeId] ?? 999;
-        const tb = typeOrder[b.assetTypeId] ?? 999;
-        if (ta !== tb) return ta - tb;
-        return a.name.localeCompare(b.name, "ko");
-      });
-  }, [assets, assetTypes, assetSearch]);
+    return sortedAssets.filter((a) => !q || a.name.toLowerCase().includes(q));
+  }, [sortedAssets, assetSearch]);
 
   const grandTotal = periodTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const totalAssets = assets.reduce((s, a) => s + (assetBalances[a.id] ?? Number(a.amount || 0)), 0);
@@ -1012,7 +1014,7 @@ export default function App() {
                     {assets.length === 0 ? (
                       <p className="text-xs py-2" style={{ color: "#5A6478" }}>아직 등록된 자산이 없어요.</p>
                     ) : (
-                      assets.map((a) => {
+                      sortedAssets.map((a) => {
                         const at = assetTypeMap[a.assetTypeId];
                         const selected = selectedAssetIds.includes(a.id);
                         return (
@@ -1246,7 +1248,7 @@ export default function App() {
                 </select>
                 <select value={manualAssetId} onChange={(e) => setManualAssetId(e.target.value)} className="flex-1 min-w-[140px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
                   <option value="">연결 안 함</option>
-                  {assets.filter((a) => !manualAssetTypeId || a.assetTypeId === manualAssetTypeId).map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                  {sortedAssets.filter((a) => !manualAssetTypeId || a.assetTypeId === manualAssetTypeId).map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
                 </select>
               </div>
             </div>
@@ -1395,7 +1397,7 @@ export default function App() {
                           >
                             <option value="">자산 연결 안 함</option>
                             {assetTypes.map((at) => {
-                              const opts = assets.filter((a) => a.assetTypeId === at.id);
+                              const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
                               if (!opts.length) return null;
                               return (
                                 <optgroup key={at.id} label={at.name}>
@@ -1648,7 +1650,7 @@ export default function App() {
                 <select value={transferFromId} onChange={(e) => setTransferFromId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
                   <option value="">자산 선택</option>
                   {assetTypes.map((at) => {
-                    const opts = assets.filter((a) => a.assetTypeId === at.id).slice().sort((x, y) => x.name.localeCompare(y.name, "ko"));
+                    const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
                     if (!opts.length) return null;
                     return (
                       <optgroup key={at.id} label={at.name}>
@@ -1663,7 +1665,7 @@ export default function App() {
                 <select value={transferToId} onChange={(e) => setTransferToId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
                   <option value="">자산 선택</option>
                   {assetTypes.map((at) => {
-                    const opts = assets.filter((a) => a.assetTypeId === at.id).slice().sort((x, y) => x.name.localeCompare(y.name, "ko"));
+                    const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
                     if (!opts.length) return null;
                     return (
                       <optgroup key={at.id} label={at.name}>
