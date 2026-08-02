@@ -1372,7 +1372,7 @@ export default function App() {
                             <Trash2 size={14} />
                           </button>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <input
                             type="date"
                             value={t.date}
