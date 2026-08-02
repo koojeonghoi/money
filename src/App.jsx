@@ -384,6 +384,8 @@ export default function App() {
   const [manualIsIncome, setManualIsIncome] = useState(false);
   const [manualCatId, setManualCatId] = useState("");
   const [manualPmId, setManualPmId] = useState("");
+  const [manualAssetId, setManualAssetId] = useState("");
+  const [expandedAssetHistoryId, setExpandedAssetHistoryId] = useState(null);
 
   const fileInputRef = useRef(null);
   const saveTimer = useRef(null);
@@ -488,8 +490,20 @@ export default function App() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `요청 실패 (${res.status})`);
 
-      const hasLocalData = transactions.length > 0 || assets.length > 0;
-      const hasCloudData = !!json.data && ((json.data.transactions?.length || 0) > 0 || (json.data.assets?.length || 0) > 0);
+      // Consider *any* non-empty field meaningful, not just transactions/assets — otherwise a
+      // cloud save that only had e.g. custom categories or income set would look "empty" here
+      // and get silently overwritten by this (truly empty) device's defaults below.
+      const isMeaningful = (d) =>
+        !!d && (
+          (d.transactions?.length || 0) > 0 ||
+          (d.assets?.length || 0) > 0 ||
+          (d.categories?.length || 0) > 0 ||
+          (d.paymentMethods?.length || 0) > 0 ||
+          (d.assetTypes?.length || 0) > 0 ||
+          !!d.income
+        );
+      const hasLocalData = isMeaningful({ transactions, assets, categories, paymentMethods, assetTypes, income });
+      const hasCloudData = isMeaningful(json.data);
 
       if (hasCloudData) {
         if (hasLocalData) {
@@ -498,11 +512,13 @@ export default function App() {
           );
           if (useCloud) applySnapshot(json.data);
         } else {
+          // this device has nothing of its own yet — always take the cloud's data, no prompt,
+          // so opening the app on a fresh/second device can never erase what's already synced.
           applySnapshot(json.data);
         }
       }
-      // if the cloud has no data yet, do nothing here — the normal debounced save effect
-      // will push this device's current (local) data up once syncSecret is set below.
+      // if the cloud has no meaningful data yet, do nothing here — the normal debounced save
+      // effect will push this device's current (local) data up once syncSecret is set below.
 
       localStorage.setItem("sync-secret", trimmed);
       setSyncSecret(trimmed);
@@ -582,7 +598,8 @@ export default function App() {
             description: r.description || "내역 없음",
             amount: Number(r.amount) || 0,
             categoryId: matchedCat ? matchedCat.id : uncategorized,
-            paymentMethodId: matchedPm ? matchedPm.id : unassignedPm
+            paymentMethodId: matchedPm ? matchedPm.id : unassignedPm,
+            assetId: ""
           };
         });
         setTransactions((prev) => [...newTx, ...prev]);
@@ -663,8 +680,12 @@ export default function App() {
     setEditingAssetTypeId(newType.id);
   };
   const deleteAssetType = (id) => {
+    const removedAssetIds = new Set(assets.filter((a) => a.assetTypeId === id).map((a) => a.id));
     setAssets((prev) => prev.filter((a) => a.assetTypeId !== id));
     setAssetTypes((prev) => prev.filter((a) => a.id !== id));
+    if (removedAssetIds.size) {
+      setTransactions((prev) => prev.map((t) => (removedAssetIds.has(t.assetId) ? { ...t, assetId: "" } : t)));
+    }
   };
 
   // ---- asset entry CRUD ----
@@ -676,6 +697,7 @@ export default function App() {
   const deleteAsset = (id) => {
     setAssets((prev) => prev.filter((a) => a.id !== id));
     setSelectedAssetIds((prev) => prev.filter((x) => x !== id));
+    setTransactions((prev) => prev.map((t) => (t.assetId === id ? { ...t, assetId: "" } : t)));
   };
   const toggleAssetSelection = (id) => {
     setSelectedAssetIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -707,7 +729,8 @@ export default function App() {
       description: manualDesc.trim() || "내역 없음",
       amount: amountNum,
       categoryId: manualCatId || categories[0]?.id,
-      paymentMethodId: manualPmId || paymentMethods[0]?.id
+      paymentMethodId: manualPmId || paymentMethods[0]?.id,
+      assetId: manualAssetId || ""
     };
     setTransactions((prev) => [newTx, ...prev]);
     rememberCategory(newTx.description, newTx.categoryId);
@@ -746,15 +769,47 @@ export default function App() {
     });
   }, [categories, periodTransactions]);
 
+  // ---- asset balances: 자산의 "기준 금액"에 그 자산으로 연결된 수입/지출 거래를 누적 반영한 실제 잔액 ----
+  // 거래 amount는 지출이면 양수, 입금이면 음수이므로 자산 잔액에는 -amount 만큼 더한다.
+  const assetHistoryMap = useMemo(() => {
+    const map = {};
+    assets.forEach((a) => {
+      const linked = transactions
+        .filter((t) => t.assetId === a.id)
+        .slice()
+        .sort((x, y) => {
+          const dx = parseTxDate(x.date) || new Date(0);
+          const dy = parseTxDate(y.date) || new Date(0);
+          return dx - dy;
+        });
+      let running = Number(a.amount || 0);
+      map[a.id] = linked.map((t) => {
+        const delta = -Number(t.amount || 0);
+        running += delta;
+        return { ...t, delta, running };
+      });
+    });
+    return map;
+  }, [assets, transactions]);
+
+  const assetBalances = useMemo(() => {
+    const map = {};
+    assets.forEach((a) => {
+      const hist = assetHistoryMap[a.id] || [];
+      map[a.id] = hist.length ? hist[hist.length - 1].running : Number(a.amount || 0);
+    });
+    return map;
+  }, [assets, assetHistoryMap]);
+
   const totalsByAssetType = useMemo(() => {
     return assetTypes
-      .map((a) => ({ ...a, total: assets.filter((x) => x.assetTypeId === a.id).reduce((s, x) => s + Number(x.amount || 0), 0) }))
+      .map((a) => ({ ...a, total: assets.filter((x) => x.assetTypeId === a.id).reduce((s, x) => s + (assetBalances[x.id] ?? Number(x.amount || 0)), 0) }))
       .filter((a) => a.total !== 0);
-  }, [assetTypes, assets]);
+  }, [assetTypes, assets, assetBalances]);
 
   const grandTotal = periodTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
-  const totalAssets = assets.reduce((s, a) => s + Number(a.amount || 0), 0);
-  const selectedAssetsTotal = assets.filter((a) => selectedAssetIds.includes(a.id)).reduce((s, a) => s + Number(a.amount || 0), 0);
+  const totalAssets = assets.reduce((s, a) => s + (assetBalances[a.id] ?? Number(a.amount || 0)), 0);
+  const selectedAssetsTotal = assets.filter((a) => selectedAssetIds.includes(a.id)).reduce((s, a) => s + (assetBalances[a.id] ?? Number(a.amount || 0)), 0);
   const actualIncomeTotal = totalsByType.find((t) => t.type === "income")?.total || 0;
   const incomeNum = Number(income) || actualIncomeTotal;
   const fixedTotal = totalsByType.find((t) => t.type === "fixed")?.total || 0;
@@ -1099,6 +1154,13 @@ export default function App() {
                   <Plus size={14} /> 추가
                 </button>
               </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-xs" style={{ color: "#5A6478" }}>반영할 자산</span>
+                <select value={manualAssetId} onChange={(e) => setManualAssetId(e.target.value)} className="flex-1 min-w-[140px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                  <option value="">연결 안 함</option>
+                  {assets.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                </select>
+              </div>
             </div>
 
             {/* Category filter */}
@@ -1237,6 +1299,15 @@ export default function App() {
                           >
                             {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
                           </select>
+                          <select
+                            value={t.assetId || ""}
+                            onChange={(e) => updateTx(t.id, { assetId: e.target.value })}
+                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0"
+                            style={{ background: "transparent", border: "1px solid #2A3B57", color: t.assetId ? "#C9A227" : "#5A6478" }}
+                          >
+                            <option value="">자산 연결 안 함</option>
+                            {assets.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                          </select>
                         </div>
                       </div>
                     );
@@ -1346,8 +1417,12 @@ export default function App() {
                   {assets.map((a) => {
                     const at = assetTypeMap[a.assetTypeId];
                     const selected = selectedAssetIds.includes(a.id);
+                    const history = assetHistoryMap[a.id] || [];
+                    const currentBalance = assetBalances[a.id] ?? Number(a.amount || 0);
+                    const changed = currentBalance !== Number(a.amount || 0);
+                    const historyOpen = expandedAssetHistoryId === a.id;
                     return (
-                      <div key={a.id} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b", background: selected ? "rgba(201,162,39,0.08)" : "transparent" }}>
+                      <div key={a.id} className="flex flex-col gap-1.5 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b", background: selected ? "rgba(201,162,39,0.08)" : "transparent" }}>
                         <div className="flex items-center gap-2">
                           <input
                             type="checkbox"
@@ -1370,6 +1445,24 @@ export default function App() {
                           >
                             {assetTypes.map((t) => (<option key={t.id} value={t.id}>{t.name}</option>))}
                           </select>
+                          <button onClick={() => deleteAsset(a.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pl-6">
+                          <p className="tabular text-base font-bold" style={{ color: "#C9A227" }}>{won(currentBalance)}</p>
+                          {history.length > 0 && (
+                            <button
+                              onClick={() => setExpandedAssetHistoryId(historyOpen ? null : a.id)}
+                              className="text-[11px] flex-shrink-0"
+                              style={{ color: "#93A0B8" }}
+                            >
+                              변동내역 {history.length}건 {historyOpen ? "닫기" : "보기"}
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 pl-6">
+                          <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>기준금액</span>
                           <input
                             type="text"
                             inputMode="numeric"
@@ -1378,20 +1471,40 @@ export default function App() {
                               const digitsOnly = e.target.value.replace(/[^0-9-]/g, "");
                               updateAsset(a.id, { amount: digitsOnly === "" ? 0 : Number(digitsOnly) });
                             }}
-                            className="tabular w-24 flex-shrink-0 bg-transparent outline-none text-sm text-right font-semibold"
-                            style={{ color: "#EDE6D3" }}
+                            className="tabular w-24 flex-shrink-0 bg-transparent outline-none text-xs text-right"
+                            style={{ color: "#93A0B8" }}
                           />
-                          <button onClick={() => deleteAsset(a.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
-                            <Trash2 size={14} />
-                          </button>
+                          <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>기준일</span>
+                          <input
+                            type="date"
+                            value={a.date}
+                            onChange={(e) => updateAsset(a.id, { date: e.target.value })}
+                            className="tabular bg-transparent outline-none text-xs"
+                            style={{ color: "#5A6478" }}
+                          />
                         </div>
-                        <input
-                          type="date"
-                          value={a.date}
-                          onChange={(e) => updateAsset(a.id, { date: e.target.value })}
-                          className="tabular bg-transparent outline-none text-xs"
-                          style={{ color: "#5A6478" }}
-                        />
+                        {changed && (
+                          <p className="text-[11px] pl-6" style={{ color: "#5A6478" }}>
+                            기준금액 {won(a.amount)}에서 연결된 거래 {history.length}건이 반영되어 현재 {won(currentBalance)}이에요.
+                          </p>
+                        )}
+                        {historyOpen && (
+                          <div className="ml-6 mt-1 rounded-lg overflow-hidden" style={{ background: "#101B2D", border: "1px solid #2A3B57" }}>
+                            {history.slice().reverse().map((h) => (
+                              <div key={h.id} className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ borderBottom: "1px solid #1e293b" }}>
+                                <div className="min-w-0">
+                                  <p className="truncate" style={{ color: "#93A0B8" }}>{h.date} · {h.description}</p>
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  <span className="tabular font-semibold" style={{ color: h.delta >= 0 ? "#4E8F72" : "#B5533B" }}>
+                                    {h.delta >= 0 ? "+" : ""}{won(h.delta)}
+                                  </span>
+                                  <span className="tabular" style={{ color: "#5A6478" }}>{won(h.running)}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
