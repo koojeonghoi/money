@@ -366,6 +366,7 @@ export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [showAssetBreakdown, setShowAssetBreakdown] = useState(false);
   const [expandedTypeCard, setExpandedTypeCard] = useState(null); // "fixed" | "variable" | "saving" | null
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
@@ -384,6 +385,9 @@ export default function App() {
   const [manualDesc, setManualDesc] = useState("");
   const [manualAmount, setManualAmount] = useState("");
   const [manualIsIncome, setManualIsIncome] = useState(false);
+  const [manualIsTransfer, setManualIsTransfer] = useState(false);
+  const [manualTransferFromId, setManualTransferFromId] = useState("");
+  const [manualTransferToId, setManualTransferToId] = useState("");
   const [manualCatId, setManualCatId] = useState("");
   const [manualPmId, setManualPmId] = useState("");
   const [manualAssetTypeId, setManualAssetTypeId] = useState("");
@@ -596,6 +600,7 @@ export default function App() {
 
   const processImageFile = useCallback(async (file) => {
     setError("");
+    setNotice("");
     setLoading(true);
     try {
       const { base64, mediaType } = await prepareImageForUpload(file);
@@ -613,12 +618,35 @@ export default function App() {
         const uncategorized = categories.find((c) => c.id === "uncategorized")?.id || categories[0].id;
         const unassignedPm = paymentMethods.find((p) => p.id === "unassigned")?.id || paymentMethods[0].id;
         const transferPm = paymentMethods.find((p) => p.id === "transfer")?.id || unassignedPm;
+        const defaultAssetTypeId = assetTypes[0]?.id || "";
         const newTx = [];
         const newTransfers = [];
+        const newAssets = []; // 이체 상대방으로 처음 등장한, 아직 등록 안 된 계좌를 자동으로 만들어서 담아둔다
+        let createdCount = 0;
+
+        // 계좌번호처럼 숫자로만 된 문자열(타인 계좌 등)은 내 자산으로 자동 생성하지 않는다.
+        const looksLikeOwnAccountName = (name) => {
+          const t = (name || "").trim();
+          if (!t) return false;
+          const digitsOnly = t.replace(/[\s\-]/g, "");
+          return !(digitsOnly.length >= 6 && /^\d+$/.test(digitsOnly));
+        };
+
+        // 자산 이름으로 자산을 찾되, 없으면 (실제 계좌/상품명처럼 보일 때) 새로 만든다.
+        const resolveOrCreateAsset = (name) => {
+          const existing = findAssetByName(name) || newAssets.find((a) => a.name.trim().toLowerCase() === (name || "").trim().toLowerCase());
+          if (existing) return existing;
+          if (!looksLikeOwnAccountName(name)) return null;
+          const created = { id: uid(), name: name.trim(), assetTypeId: defaultAssetTypeId, amount: 0, date: todayStr() };
+          newAssets.push(created);
+          createdCount += 1;
+          return created;
+        };
+
         rows.forEach((r) => {
           if (r.type === "transfer") {
-            const fromAsset = findAssetByName(r.fromAsset);
-            const toAsset = findAssetByName(r.toAsset);
+            const fromAsset = resolveOrCreateAsset(r.fromAsset);
+            const toAsset = resolveOrCreateAsset(r.toAsset);
             if (fromAsset && toAsset && fromAsset.id !== toAsset.id) {
               newTransfers.push({
                 id: uid(),
@@ -630,8 +658,9 @@ export default function App() {
               });
               return;
             }
-            // 이체로 보이지만 두 계좌를 자산 목록에서 못 찾았으면, 데이터가 사라지지 않도록
-            // "계좌이체" 결제수단이 붙은 일반 거래로 남겨서 나중에 직접 자산을 연결할 수 있게 한다.
+            // 상대방이 계좌번호뿐이라 자산으로 만들 수 없는 경우(타인 계좌로 보냄 등) — 그래도 내 쪽 계좌를
+            // 찾았거나 새로 만들었다면 최소한 그 자산 잔액에는 반영되도록 일반 거래로 남긴다.
+            const known = fromAsset || toAsset;
             newTx.push({
               id: uid(),
               date: r.date || todayStr(),
@@ -639,7 +668,7 @@ export default function App() {
               amount: Math.abs(Number(r.amount) || 0),
               categoryId: uncategorized,
               paymentMethodId: transferPm,
-              assetId: fromAsset ? fromAsset.id : ""
+              assetId: known ? known.id : ""
             });
             return;
           }
@@ -656,15 +685,19 @@ export default function App() {
             assetId: ""
           });
         });
+        if (newAssets.length) setAssets((prev) => [...prev, ...newAssets]);
         if (newTx.length) setTransactions((prev) => [...newTx, ...prev]);
         if (newTransfers.length) setTransfers((prev) => [...newTransfers, ...prev]);
+        if (createdCount > 0) {
+          setNotice(`이체 상대방 계좌 ${createdCount}개를 자산 목록에 새로 추가했어요 (자산 탭에서 종류를 확인/수정해 주세요).`);
+        }
       }
     } catch (e) {
       setError(e.message || "이미지를 분석하는 중 문제가 발생했어요. 다시 시도해 주세요.");
     } finally {
       setLoading(false);
     }
-  }, [categories, paymentMethods, assets, categoryMemory, catMap, findCategoryByName, findPaymentMethodByName, findAssetByName, recallCategory]);
+  }, [categories, paymentMethods, assets, assetTypes, categoryMemory, catMap, findCategoryByName, findPaymentMethodByName, findAssetByName, recallCategory]);
 
   const handlePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
@@ -773,21 +806,29 @@ export default function App() {
   };
 
   // ---- transfer CRUD (계좌 간 이체: 보내는 자산은 차감, 받는 자산은 증액) ----
-  const addTransfer = () => {
-    const absAmount = Number(String(transferAmount).replace(/[^0-9]/g, "")) || 0;
-    if (absAmount === 0 || !transferFromId || !transferToId || transferFromId === transferToId) return;
+  const addTransfer = (opts) => {
+    const date = opts?.date ?? transferDate;
+    const fromId = opts?.fromAssetId ?? transferFromId;
+    const toId = opts?.toAssetId ?? transferToId;
+    const amountRaw = opts?.amount ?? transferAmount;
+    const memo = opts?.memo ?? transferMemo;
+    const absAmount = Number(String(amountRaw).replace(/[^0-9]/g, "")) || 0;
+    if (absAmount === 0 || !fromId || !toId || fromId === toId) return false;
     const newTransfer = {
       id: uid(),
-      date: transferDate || todayStr(),
-      fromAssetId: transferFromId,
-      toAssetId: transferToId,
+      date: date || todayStr(),
+      fromAssetId: fromId,
+      toAssetId: toId,
       amount: absAmount,
-      memo: transferMemo.trim()
+      memo: (memo || "").trim()
     };
     setTransfers((prev) => [newTransfer, ...prev]);
-    setTransferAmount("");
-    setTransferMemo("");
-    setTransferDate(todayStr());
+    if (!opts) {
+      setTransferAmount("");
+      setTransferMemo("");
+      setTransferDate(todayStr());
+    }
+    return true;
   };
   const deleteTransfer = (id) => setTransfers((prev) => prev.filter((tr) => tr.id !== id));
 
@@ -808,6 +849,20 @@ export default function App() {
   };
 
   const addManualTransaction = () => {
+    if (manualIsTransfer) {
+      const ok = addTransfer({
+        date: manualDate,
+        fromAssetId: manualTransferFromId,
+        toAssetId: manualTransferToId,
+        amount: manualAmount,
+        memo: manualDesc
+      });
+      if (!ok) return;
+      setManualDesc("");
+      setManualAmount("");
+      setManualDate(todayStr());
+      return;
+    }
     const absAmount = Number(String(manualAmount).replace(/[^0-9]/g, "")) || 0;
     if (!manualDesc.trim() && absAmount === 0) return;
     const amountNum = manualIsIncome ? -absAmount : absAmount;
@@ -1038,6 +1093,11 @@ export default function App() {
                   {error}
                 </div>
               )}
+              {notice && (
+                <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(78,143,114,0.15)", border: "1px solid #4E8F72", color: "#B7D9C6" }}>
+                  {notice}
+                </div>
+              )}
 
               <div className="rounded-2xl p-4" style={card}>
                 <button onClick={() => setShowAssetBreakdown((v) => !v)} className="flex items-center justify-between w-full text-left">
@@ -1220,7 +1280,7 @@ export default function App() {
                 />
                 <input
                   type="text"
-                  placeholder="내역 (예: 스타벅스)"
+                  placeholder={manualIsTransfer ? "메모 (선택)" : "내역 (예: 스타벅스)"}
                   value={manualDesc}
                   onChange={(e) => setManualDesc(e.target.value)}
                   className="flex-1 min-w-[120px] rounded-lg px-3 py-2 text-sm outline-none"
@@ -1239,40 +1299,92 @@ export default function App() {
                   <button
                     onClick={() => {
                       setManualIsIncome(false);
+                      setManualIsTransfer(false);
                       if (catMap[manualCatId]?.type === "income") {
                         setManualCatId(categories.find((c) => c.type !== "income")?.id || categories[0]?.id);
                       }
                     }}
                     className="px-2.5 py-2 text-xs font-semibold"
-                    style={{ background: !manualIsIncome ? "rgba(181,83,59,0.2)" : "transparent", color: !manualIsIncome ? "#B5533B" : "#93A0B8" }}
+                    style={{ background: !manualIsIncome && !manualIsTransfer ? "rgba(181,83,59,0.2)" : "transparent", color: !manualIsIncome && !manualIsTransfer ? "#B5533B" : "#93A0B8" }}
                   >
                     지출
                   </button>
                   <button
                     onClick={() => {
                       setManualIsIncome(true);
+                      setManualIsTransfer(false);
                       if (catMap[manualCatId]?.type !== "income") {
                         setManualCatId(categories.find((c) => c.type === "income")?.id || manualCatId);
                       }
                     }}
                     className="px-2.5 py-2 text-xs font-semibold"
-                    style={{ background: manualIsIncome ? "rgba(78,143,114,0.2)" : "transparent", color: manualIsIncome ? "#4E8F72" : "#93A0B8" }}
+                    style={{ background: manualIsIncome && !manualIsTransfer ? "rgba(78,143,114,0.2)" : "transparent", color: manualIsIncome && !manualIsTransfer ? "#4E8F72" : "#93A0B8" }}
                   >
                     입금
                   </button>
+                  <button
+                    onClick={() => setManualIsTransfer(true)}
+                    className="px-2.5 py-2 text-xs font-semibold"
+                    style={{ background: manualIsTransfer ? "rgba(201,162,39,0.2)" : "transparent", color: manualIsTransfer ? "#C9A227" : "#93A0B8" }}
+                  >
+                    이체
+                  </button>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <select value={manualCatId} onChange={(e) => setManualCatId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
-                  {categories.map((c) => (<option key={c.id} value={c.id}>{labelWithEmoji(c)}</option>))}
-                </select>
-                <select value={manualPmId} onChange={(e) => setManualPmId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
-                  {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
-                </select>
-                <button onClick={addManualTransaction} className="px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-1" style={{ background: "#C9A227", color: "#101B2D" }}>
-                  <Plus size={14} /> 추가
-                </button>
-              </div>
+              {manualIsTransfer ? (
+                <div className="flex flex-wrap gap-2 items-center">
+                  <span className="text-xs flex-shrink-0 w-14" style={{ color: "#5A6478" }}>보내는</span>
+                  <select value={manualTransferFromId} onChange={(e) => setManualTransferFromId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                    <option value="">자산 선택</option>
+                    {assetTypes.map((at) => {
+                      const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
+                      if (!opts.length) return null;
+                      return (
+                        <optgroup key={at.id} label={at.name}>
+                          {opts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <select value={manualCatId} onChange={(e) => setManualCatId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                    {categories.map((c) => (<option key={c.id} value={c.id}>{labelWithEmoji(c)}</option>))}
+                  </select>
+                  <select value={manualPmId} onChange={(e) => setManualPmId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                    {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
+                  </select>
+                  <button onClick={addManualTransaction} className="px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-1" style={{ background: "#C9A227", color: "#101B2D" }}>
+                    <Plus size={14} /> 추가
+                  </button>
+                </div>
+              )}
+              {manualIsTransfer ? (
+                <div className="flex flex-wrap gap-2 items-center">
+                  <span className="text-xs flex-shrink-0 w-14" style={{ color: "#5A6478" }}>받는</span>
+                  <select value={manualTransferToId} onChange={(e) => setManualTransferToId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                    <option value="">자산 선택</option>
+                    {assetTypes.map((at) => {
+                      const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
+                      if (!opts.length) return null;
+                      return (
+                        <optgroup key={at.id} label={at.name}>
+                          {opts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                  <button
+                    onClick={addManualTransaction}
+                    disabled={!manualTransferFromId || !manualTransferToId || manualTransferFromId === manualTransferToId || !manualAmount}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-1 disabled:opacity-40"
+                    style={{ background: "#C9A227", color: "#101B2D" }}
+                  >
+                    <Plus size={14} /> 이체
+                  </button>
+                </div>
+              ) : (
               <div className="flex flex-wrap gap-2 items-center">
                 <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>반영할 자산</span>
                 <select
@@ -1294,6 +1406,10 @@ export default function App() {
                   {sortedAssets.filter((a) => !manualAssetTypeId || a.assetTypeId === manualAssetTypeId).map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
                 </select>
               </div>
+              )}
+              {manualIsTransfer && manualTransferFromId && manualTransferFromId === manualTransferToId && (
+                <p className="text-xs" style={{ color: "#B5533B" }}>보내는 자산과 받는 자산은 다르게 선택해 주세요.</p>
+              )}
             </div>
 
             {/* Category filter */}
