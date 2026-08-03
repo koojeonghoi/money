@@ -1532,9 +1532,14 @@ export default function App() {
                               value={tr.memo}
                               onChange={(e) => updateTransfer(tr.id, { memo: e.target.value })}
                               placeholder="메모 (선택)"
-                              className="flex-1 min-w-0 bg-transparent outline-none text-sm truncate"
+                              className="flex-1 min-w-0 bg-transparent outline-none text-sm"
                               style={{ color: "#EDE6D3" }}
                             />
+                            <button onClick={() => deleteTransfer(tr.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2">
                             <button
                               onClick={() => convertTransferToTransaction(tr)}
                               title="지출/입금으로 전환"
@@ -1551,12 +1556,9 @@ export default function App() {
                                 const digitsOnly = e.target.value.replace(/[^0-9]/g, "");
                                 updateTransfer(tr.id, { amount: digitsOnly === "" ? 0 : Number(digitsOnly) });
                               }}
-                              className="tabular w-20 flex-shrink-0 bg-transparent outline-none text-sm text-right font-semibold"
+                              className="tabular flex-1 min-w-0 bg-transparent outline-none text-sm text-right font-semibold"
                               style={{ color: "#C9A227" }}
                             />
-                            <button onClick={() => deleteTransfer(tr.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
-                              <Trash2 size={14} />
-                            </button>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <input
@@ -1617,9 +1619,14 @@ export default function App() {
                           <input
                             value={t.description}
                             onChange={(e) => updateTx(t.id, { description: e.target.value })}
-                            className="flex-1 min-w-0 bg-transparent outline-none text-sm truncate"
+                            className="flex-1 min-w-0 bg-transparent outline-none text-sm"
                             style={{ color: "#EDE6D3" }}
                           />
+                          <button onClick={() => deleteTx(t.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
                           <select
                             value={t.categoryId}
                             onChange={(e) => handleTxCategoryChange(t, e.target.value)}
@@ -1656,12 +1663,9 @@ export default function App() {
                               const signed = t.amount < 0 ? -abs : abs;
                               updateTx(t.id, { amount: signed });
                             }}
-                            className="tabular w-20 flex-shrink-0 bg-transparent outline-none text-sm text-right font-semibold"
+                            className="tabular flex-1 min-w-0 bg-transparent outline-none text-sm text-right font-semibold"
                             style={{ color: t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
                           />
-                          <button onClick={() => deleteTx(t.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
-                            <Trash2 size={14} />
-                          </button>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <input
