@@ -1531,7 +1531,7 @@ export default function App() {
                               onClick={() => convertTransferToTransaction(tr)}
                               title="지출/입금으로 전환"
                               className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
-                              style={{ background: "rgba(201,162,39,0.15)", color: "#C9A227" }}
+                              style={{ background: "rgba(92,158,255,0.15)", color: "#5C9EFF" }}
                             >
                               이체
                             </button>
@@ -1547,7 +1547,7 @@ export default function App() {
                               style={{ color: "#C9A227" }}
                             />
                           </div>
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex items-center">
                             <input
                               type="date"
                               value={tr.date}
@@ -1555,10 +1555,12 @@ export default function App() {
                               className="tabular bg-transparent outline-none text-xs flex-shrink-0"
                               style={{ color: "#5A6478" }}
                             />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
                             <select
                               value={tr.fromAssetId || ""}
                               onChange={(e) => updateTransfer(tr.id, { fromAssetId: e.target.value })}
-                              className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[110px]"
+                              className="w-full min-w-0 text-xs rounded-md px-1 py-0.5 outline-none"
                               style={{ background: "transparent", border: "1px solid #2A3B57", color: tr.fromAssetId ? "#EDE6D3" : "#5A6478" }}
                             >
                               <option value="">자산 연결 안 함</option>
@@ -1575,7 +1577,7 @@ export default function App() {
                             <select
                               value={tr.toAssetId || ""}
                               onChange={(e) => updateTransfer(tr.id, { toAssetId: e.target.value })}
-                              className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[110px]"
+                              className="w-full min-w-0 text-xs rounded-md px-1 py-0.5 outline-none"
                               style={{ background: "transparent", border: "1px solid #2A3B57", color: tr.toAssetId ? "#EDE6D3" : "#5A6478" }}
                             >
                               <option value="">자산 연결 안 함</option>
