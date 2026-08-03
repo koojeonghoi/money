@@ -1513,7 +1513,7 @@ export default function App() {
                     if (item.kind === "transfer") {
                       const tr = item.tr;
                       return (
-                        <div key={`tr-${tr.id}`} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b", background: "rgba(201,162,39,0.05)" }}>
+                        <div key={`tr-${tr.id}`} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b" }}>
                           <div className="flex items-center gap-2">
                             <input
                               value={tr.memo}
