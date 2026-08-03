@@ -831,6 +831,25 @@ export default function App() {
     return true;
   };
   const deleteTransfer = (id) => setTransfers((prev) => prev.filter((tr) => tr.id !== id));
+  const updateTransfer = (id, patch) => setTransfers((prev) => prev.map((tr) => (tr.id === id ? { ...tr, ...patch } : tr)));
+
+  // 사용 내역 목록에서 바로 지출/입금 ↔ 이체 로 전환할 수 있게 해준다 (자산 탭까지 갈 필요 없이).
+  const convertTransactionToTransfer = (t) => {
+    setTransactions((prev) => prev.filter((x) => x.id !== t.id));
+    setTransfers((prev) => [
+      { id: uid(), date: t.date, fromAssetId: t.assetId || "", toAssetId: "", amount: Math.abs(Number(t.amount) || 0), memo: t.description || "" },
+      ...prev
+    ]);
+  };
+  const convertTransferToTransaction = (tr) => {
+    setTransfers((prev) => prev.filter((x) => x.id !== tr.id));
+    const uncategorized = categories.find((c) => c.id === "uncategorized")?.id || categories[0]?.id;
+    const transferPm = paymentMethods.find((p) => p.id === "transfer")?.id || paymentMethods[0]?.id;
+    setTransactions((prev) => [
+      { id: uid(), date: tr.date, description: tr.memo || "이체", amount: Math.abs(Number(tr.amount) || 0), categoryId: uncategorized, paymentMethodId: transferPm, assetId: tr.fromAssetId || "" },
+      ...prev
+    ]);
+  };
 
   // ---- transaction CRUD ----
   const updateTx = (id, patch) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -893,6 +912,14 @@ export default function App() {
       return d >= payPeriod.start && d <= payPeriod.end;
     });
   }, [transactions, payPeriod]);
+
+  const periodTransfers = useMemo(() => {
+    return transfers.filter((tr) => {
+      const d = parseTxDate(tr.date, payPeriod.start, payPeriod.end);
+      if (!d) return true;
+      return d >= payPeriod.start && d <= payPeriod.end;
+    });
+  }, [transfers, payPeriod]);
 
   const totalsByCategory = useMemo(() => {
     return categories
@@ -1016,18 +1043,27 @@ export default function App() {
     const catType = catMap[t.categoryId]?.type;
     const matchesType =
       typeFilter === "all" ? true :
+      typeFilter === "transfer" ? false :
       typeFilter === "expense" ? (t.amount >= 0 && catType !== "saving") :
       typeFilter === "saving" ? catType === "saving" :
       t.amount < 0; // income
     return matchesCategory && matchesType;
   });
+  const showTransfersInLedger = selectedCategoryIds.length === 0 && (typeFilter === "all" || typeFilter === "transfer");
+  const ledgerItems = useMemo(() => {
+    const txItems = filteredTransactions.map((t) => ({ kind: "tx", key: t.id, date: t.date, tx: t }));
+    const trItems = showTransfersInLedger ? periodTransfers.map((tr) => ({ kind: "transfer", key: tr.id, date: tr.date, tr })) : [];
+    return [...txItems, ...trItems].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [filteredTransactions, periodTransfers, showTransfersInLedger]);
   const filteredTotal = filteredTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
+  const filteredTransferTotal = periodTransfers.reduce((s, tr) => s + Math.abs(Number(tr.amount || 0)), 0);
   const filteredTotalLabel =
+    typeFilter === "transfer" ? "이체 합계" :
     typeFilter === "income" ? "입금 합계" :
     typeFilter === "saving" ? "저축 합계" :
     typeFilter === "expense" ? "지출 합계" :
     filteredTotal >= 0 ? "지출 합계" : "순수입";
-  const filteredTotalAbs = Math.abs(filteredTotal);
+  const filteredTotalAbs = typeFilter === "transfer" ? filteredTransferTotal : Math.abs(filteredTotal);
 
   const card = { background: "#16233A", border: "1px solid #2A3B57" };
   const inputStyle = { background: "#101B2D", border: "1px solid #2A3B57", color: "#EDE6D3" };
@@ -1439,7 +1475,7 @@ export default function App() {
                 </div>
               )}
               <div className="flex gap-1.5 mb-2">
-                {[["all", "전체"], ["expense", "지출만"], ["income", "입금만"], ["saving", "저축만"]].map(([val, label]) => (
+                {[["all", "전체"], ["expense", "지출만"], ["income", "입금만"], ["saving", "저축만"], ["transfer", "이체만"]].map(([val, label]) => (
                   <button
                     key={val}
                     onClick={() => setTypeFilter(val)}
@@ -1468,7 +1504,7 @@ export default function App() {
               <p className="text-sm mt-3">
                 {selectedCategoryIds.length === 0 ? filteredTotalLabel : `${selectedCategoryIds.length}개 카테고리 ${filteredTotalLabel}`}{" "}
                 <span className="tabular font-bold" style={{ color: "#C9A227" }}>{won(filteredTotalAbs)}</span>
-                <span className="text-xs ml-2" style={{ color: "#5A6478" }}>({filteredTransactions.length}건)</span>
+                <span className="text-xs ml-2" style={{ color: "#5A6478" }}>({ledgerItems.length}건)</span>
               </p>
             </div>
 
@@ -1480,13 +1516,100 @@ export default function App() {
                   <RotateCcw size={12} /> 이 기간 초기화
                 </button>
               </div>
-              {filteredTransactions.length === 0 ? (
+              {ledgerItems.length === 0 ? (
                 <div className="px-4 pb-6 pt-2 text-sm text-center" style={{ color: "#5A6478" }}>
-                  {periodTransactions.length === 0 ? "이 기간엔 내역이 없어요." : "이 조건에 맞는 내역이 없어요."}
+                  {periodTransactions.length === 0 && periodTransfers.length === 0 ? "이 기간엔 내역이 없어요." : "이 조건에 맞는 내역이 없어요."}
                 </div>
               ) : (
                 <div className="pb-1">
-                  {filteredTransactions.map((t) => {
+                  {ledgerItems.map((item) => {
+                    if (item.kind === "transfer") {
+                      const tr = item.tr;
+                      return (
+                        <div key={`tr-${tr.id}`} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b", background: "rgba(201,162,39,0.05)" }}>
+                          <div className="flex items-center gap-2">
+                            <input
+                              value={tr.memo}
+                              onChange={(e) => updateTransfer(tr.id, { memo: e.target.value })}
+                              placeholder="메모 (선택)"
+                              className="flex-1 min-w-0 bg-transparent outline-none text-sm truncate"
+                              style={{ color: "#EDE6D3" }}
+                            />
+                            <button
+                              onClick={() => convertTransferToTransaction(tr)}
+                              title="지출/입금으로 전환"
+                              className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+                              style={{ background: "rgba(201,162,39,0.15)", color: "#C9A227" }}
+                            >
+                              이체
+                            </button>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={Math.abs(Number(tr.amount || 0)).toLocaleString("ko-KR")}
+                              onChange={(e) => {
+                                const digitsOnly = e.target.value.replace(/[^0-9]/g, "");
+                                updateTransfer(tr.id, { amount: digitsOnly === "" ? 0 : Number(digitsOnly) });
+                              }}
+                              className="tabular w-20 flex-shrink-0 bg-transparent outline-none text-sm text-right font-semibold"
+                              style={{ color: "#C9A227" }}
+                            />
+                            <button onClick={() => deleteTransfer(tr.id)} className="flex-shrink-0" style={{ color: "#5A6478" }}>
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="date"
+                              value={tr.date}
+                              onChange={(e) => updateTransfer(tr.id, { date: e.target.value })}
+                              className="tabular bg-transparent outline-none text-xs flex-shrink-0"
+                              style={{ color: "#5A6478" }}
+                            />
+                            <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>보내는</span>
+                            <select
+                              value={tr.fromAssetId || ""}
+                              onChange={(e) => updateTransfer(tr.id, { fromAssetId: e.target.value })}
+                              className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[110px]"
+                              style={{ background: "transparent", border: "1px solid #2A3B57", color: tr.fromAssetId ? "#EDE6D3" : "#5A6478" }}
+                            >
+                              <option value="">선택 안 함</option>
+                              {assetTypes.map((at) => {
+                                const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
+                                if (!opts.length) return null;
+                                return (
+                                  <optgroup key={at.id} label={at.name}>
+                                    {opts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                                  </optgroup>
+                                );
+                              })}
+                            </select>
+                            <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>받는</span>
+                            <select
+                              value={tr.toAssetId || ""}
+                              onChange={(e) => updateTransfer(tr.id, { toAssetId: e.target.value })}
+                              className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[110px]"
+                              style={{ background: "transparent", border: "1px solid #2A3B57", color: tr.toAssetId ? "#EDE6D3" : "#5A6478" }}
+                            >
+                              <option value="">선택 안 함</option>
+                              {assetTypes.map((at) => {
+                                const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
+                                if (!opts.length) return null;
+                                return (
+                                  <optgroup key={at.id} label={at.name}>
+                                    {opts.map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                                  </optgroup>
+                                );
+                              })}
+                            </select>
+                          </div>
+                          {tr.fromAssetId && tr.fromAssetId === tr.toAssetId && (
+                            <p className="text-[11px]" style={{ color: "#B5533B" }}>보내는 자산과 받는 자산이 같아요.</p>
+                          )}
+                        </div>
+                      );
+                    }
+                    const t = item.tx;
                     const cat = catMap[t.categoryId];
                     return (
                       <div key={t.id} className="flex flex-col gap-1 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b" }}>
@@ -1514,6 +1637,14 @@ export default function App() {
                             }}
                           >
                             {t.amount < 0 ? "입금" : "지출"}
+                          </button>
+                          <button
+                            onClick={() => convertTransactionToTransfer(t)}
+                            title="이체로 전환"
+                            className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+                            style={{ background: "transparent", color: "#5A6478", border: "1px solid #2A3B57" }}
+                          >
+                            ⇄이체
                           </button>
                           <input
                             type="text"
