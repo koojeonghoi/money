@@ -618,35 +618,17 @@ export default function App() {
         const uncategorized = categories.find((c) => c.id === "uncategorized")?.id || categories[0].id;
         const unassignedPm = paymentMethods.find((p) => p.id === "unassigned")?.id || paymentMethods[0].id;
         const transferPm = paymentMethods.find((p) => p.id === "transfer")?.id || unassignedPm;
-        const defaultAssetTypeId = assetTypes[0]?.id || "";
         const newTx = [];
         const newTransfers = [];
-        const newAssets = []; // 이체 상대방으로 처음 등장한, 아직 등록 안 된 계좌를 자동으로 만들어서 담아둔다
-        let createdCount = 0;
+        const importedAt = Date.now();
 
-        // 계좌번호처럼 숫자로만 된 문자열(타인 계좌 등)은 내 자산으로 자동 생성하지 않는다.
-        const looksLikeOwnAccountName = (name) => {
-          const t = (name || "").trim();
-          if (!t) return false;
-          const digitsOnly = t.replace(/[\s\-]/g, "");
-          return !(digitsOnly.length >= 6 && /^\d+$/.test(digitsOnly));
-        };
-
-        // 자산 이름으로 자산을 찾되, 없으면 (실제 계좌/상품명처럼 보일 때) 새로 만든다.
-        const resolveOrCreateAsset = (name) => {
-          const existing = findAssetByName(name) || newAssets.find((a) => a.name.trim().toLowerCase() === (name || "").trim().toLowerCase());
-          if (existing) return existing;
-          if (!looksLikeOwnAccountName(name)) return null;
-          const created = { id: uid(), name: name.trim(), assetTypeId: defaultAssetTypeId, amount: 0, date: todayStr() };
-          newAssets.push(created);
-          createdCount += 1;
-          return created;
-        };
+        // 자산은 자동으로 새로 만들지 않는다 — 이름이 정확히 일치하는 기존 자산이 있을 때만 연결한다.
+        const resolveAsset = (name) => findAssetByName(name) || null;
 
         rows.forEach((r) => {
           if (r.type === "transfer") {
-            const fromAsset = resolveOrCreateAsset(r.fromAsset);
-            const toAsset = resolveOrCreateAsset(r.toAsset);
+            const fromAsset = resolveAsset(r.fromAsset);
+            const toAsset = resolveAsset(r.toAsset);
             if (fromAsset && toAsset && fromAsset.id !== toAsset.id) {
               newTransfers.push({
                 id: uid(),
@@ -654,12 +636,13 @@ export default function App() {
                 fromAssetId: fromAsset.id,
                 toAssetId: toAsset.id,
                 amount: Math.abs(Number(r.amount) || 0),
-                memo: r.description || ""
+                memo: r.description || "",
+                createdAt: importedAt
               });
               return;
             }
-            // 상대방이 계좌번호뿐이라 자산으로 만들 수 없는 경우(타인 계좌로 보냄 등) — 그래도 내 쪽 계좌를
-            // 찾았거나 새로 만들었다면 최소한 그 자산 잔액에는 반영되도록 일반 거래로 남긴다.
+            // 상대방 계좌를 자동으로 찾지 못한 경우 — 내 쪽 계좌를 찾았다면 최소한 그 자산 잔액에는
+            // 반영되도록 일반 거래로 남기고, 나머지는 사용자가 직접 자산을 연결하도록 비워 둔다.
             const known = fromAsset || toAsset;
             newTx.push({
               id: uid(),
@@ -668,7 +651,8 @@ export default function App() {
               amount: Math.abs(Number(r.amount) || 0),
               categoryId: uncategorized,
               paymentMethodId: transferPm,
-              assetId: known ? known.id : ""
+              assetId: known ? known.id : "",
+              createdAt: importedAt
             });
             return;
           }
@@ -682,15 +666,12 @@ export default function App() {
             amount: Number(r.amount) || 0,
             categoryId: matchedCat ? matchedCat.id : uncategorized,
             paymentMethodId: matchedPm ? matchedPm.id : unassignedPm,
-            assetId: ""
+            assetId: "",
+            createdAt: importedAt
           });
         });
-        if (newAssets.length) setAssets((prev) => [...prev, ...newAssets]);
         if (newTx.length) setTransactions((prev) => [...newTx, ...prev]);
         if (newTransfers.length) setTransfers((prev) => [...newTransfers, ...prev]);
-        if (createdCount > 0) {
-          setNotice(`이체 상대방 계좌 ${createdCount}개를 자산 목록에 새로 추가했어요 (자산 탭에서 종류를 확인/수정해 주세요).`);
-        }
       }
     } catch (e) {
       setError(e.message || "이미지를 분석하는 중 문제가 발생했어요. 다시 시도해 주세요.");
@@ -820,7 +801,8 @@ export default function App() {
       fromAssetId: fromId,
       toAssetId: toId,
       amount: absAmount,
-      memo: (memo || "").trim()
+      memo: (memo || "").trim(),
+      createdAt: Date.now()
     };
     setTransfers((prev) => [newTransfer, ...prev]);
     if (!opts) {
@@ -837,7 +819,7 @@ export default function App() {
   const convertTransactionToTransfer = (t) => {
     setTransactions((prev) => prev.filter((x) => x.id !== t.id));
     setTransfers((prev) => [
-      { id: uid(), date: t.date, fromAssetId: t.assetId || "", toAssetId: "", amount: Math.abs(Number(t.amount) || 0), memo: t.description || "" },
+      { id: uid(), date: t.date, fromAssetId: t.assetId || "", toAssetId: "", amount: Math.abs(Number(t.amount) || 0), memo: t.description || "", createdAt: t.createdAt || Date.now() },
       ...prev
     ]);
   };
@@ -846,7 +828,7 @@ export default function App() {
     const uncategorized = categories.find((c) => c.id === "uncategorized")?.id || categories[0]?.id;
     const transferPm = paymentMethods.find((p) => p.id === "transfer")?.id || paymentMethods[0]?.id;
     setTransactions((prev) => [
-      { id: uid(), date: tr.date, description: tr.memo || "이체", amount: Math.abs(Number(tr.amount) || 0), categoryId: uncategorized, paymentMethodId: transferPm, assetId: tr.fromAssetId || "" },
+      { id: uid(), date: tr.date, description: tr.memo || "이체", amount: Math.abs(Number(tr.amount) || 0), categoryId: uncategorized, paymentMethodId: transferPm, assetId: tr.fromAssetId || "", createdAt: tr.createdAt || Date.now() },
       ...prev
     ]);
   };
@@ -892,7 +874,8 @@ export default function App() {
       amount: amountNum,
       categoryId: manualCatId || categories[0]?.id,
       paymentMethodId: manualPmId || paymentMethods[0]?.id,
-      assetId: manualAssetId || ""
+      assetId: manualAssetId || "",
+      createdAt: Date.now()
     };
     setTransactions((prev) => [newTx, ...prev]);
     rememberCategory(newTx.description, newTx.categoryId);
@@ -1051,9 +1034,13 @@ export default function App() {
   });
   const showTransfersInLedger = selectedCategoryIds.length === 0 && (typeFilter === "all" || typeFilter === "transfer");
   const ledgerItems = useMemo(() => {
-    const txItems = filteredTransactions.map((t) => ({ kind: "tx", key: t.id, date: t.date, tx: t }));
-    const trItems = showTransfersInLedger ? periodTransfers.map((tr) => ({ kind: "transfer", key: tr.id, date: tr.date, tr })) : [];
-    return [...txItems, ...trItems].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const txItems = filteredTransactions.map((t) => ({ kind: "tx", key: t.id, date: t.date, createdAt: t.createdAt || 0, tx: t }));
+    const trItems = showTransfersInLedger ? periodTransfers.map((tr) => ({ kind: "transfer", key: tr.id, date: tr.date, createdAt: tr.createdAt || 0, tr })) : [];
+    // 최근에 추가/수정한 항목이 위로 오도록 정렬한다 (createdAt이 없는 옛 데이터는 날짜순으로 폴백).
+    return [...txItems, ...trItems].sort((a, b) => {
+      if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
+      return (b.date || "").localeCompare(a.date || "");
+    });
   }, [filteredTransactions, periodTransfers, showTransfersInLedger]);
   const filteredTotal = filteredTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const filteredTransferTotal = periodTransfers.reduce((s, tr) => s + Math.abs(Number(tr.amount || 0)), 0);
@@ -1568,14 +1555,13 @@ export default function App() {
                               className="tabular bg-transparent outline-none text-xs flex-shrink-0"
                               style={{ color: "#5A6478" }}
                             />
-                            <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>보내는</span>
                             <select
                               value={tr.fromAssetId || ""}
                               onChange={(e) => updateTransfer(tr.id, { fromAssetId: e.target.value })}
                               className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[110px]"
                               style={{ background: "transparent", border: "1px solid #2A3B57", color: tr.fromAssetId ? "#EDE6D3" : "#5A6478" }}
                             >
-                              <option value="">선택 안 함</option>
+                              <option value="">자산 연결 안 함</option>
                               {assetTypes.map((at) => {
                                 const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
                                 if (!opts.length) return null;
@@ -1586,14 +1572,13 @@ export default function App() {
                                 );
                               })}
                             </select>
-                            <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>받는</span>
                             <select
                               value={tr.toAssetId || ""}
                               onChange={(e) => updateTransfer(tr.id, { toAssetId: e.target.value })}
                               className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[110px]"
                               style={{ background: "transparent", border: "1px solid #2A3B57", color: tr.toAssetId ? "#EDE6D3" : "#5A6478" }}
                             >
-                              <option value="">선택 안 함</option>
+                              <option value="">자산 연결 안 함</option>
                               {assetTypes.map((at) => {
                                 const opts = sortedAssets.filter((a) => a.assetTypeId === at.id);
                                 if (!opts.length) return null;
@@ -1675,14 +1660,6 @@ export default function App() {
                             className="tabular bg-transparent outline-none text-xs flex-shrink-0"
                             style={{ color: "#5A6478" }}
                           />
-                          <select
-                            value={t.paymentMethodId || "unassigned"}
-                            onChange={(e) => updateTx(t.id, { paymentMethodId: e.target.value })}
-                            className="text-xs rounded-md px-1 py-0.5 outline-none flex-shrink-0 max-w-[100px]"
-                            style={{ background: "transparent", border: "1px solid #2A3B57", color: "#93A0B8" }}
-                          >
-                            {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
-                          </select>
                           <select
                             value={t.assetId || ""}
                             onChange={(e) => updateTx(t.id, { assetId: e.target.value })}
