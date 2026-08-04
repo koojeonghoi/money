@@ -625,14 +625,24 @@ export default function App() {
         // 자산은 자동으로 새로 만들지 않는다 — 이름이 정확히 일치하는 기존 자산이 있을 때만 연결한다.
         const resolveAsset = (name) => findAssetByName(name) || null;
 
+        // AI가 이미지에서 그대로 뽑아온 날짜 문자열("4일", "8/4" 등)은 <input type="date">가 인식하는
+        // YYYY-MM-DD 형식이 아니라서 그대로 저장하면 목록에서 날짜가 빈 값으로 보인다.
+        // 현재 정산 기간을 문맥으로 삼아 정규화된 형식으로 변환해 저장한다.
+        const currentPeriod = getPayPeriodByOffset(paydayDom, periodOffset);
+        const normalizeRowDate = (rawDate) => {
+          const parsed = parseTxDate(rawDate, currentPeriod.start, currentPeriod.end);
+          return parsed ? dateToYmd(parsed) : todayStr();
+        };
+
         rows.forEach((r) => {
+          const normalizedDate = normalizeRowDate(r.date);
           if (r.type === "transfer") {
             const fromAsset = resolveAsset(r.fromAsset);
             const toAsset = resolveAsset(r.toAsset);
             if (fromAsset && toAsset && fromAsset.id !== toAsset.id) {
               newTransfers.push({
                 id: uid(),
-                date: r.date || todayStr(),
+                date: normalizedDate,
                 fromAssetId: fromAsset.id,
                 toAssetId: toAsset.id,
                 amount: Math.abs(Number(r.amount) || 0),
@@ -646,7 +656,7 @@ export default function App() {
             const known = fromAsset || toAsset;
             newTx.push({
               id: uid(),
-              date: r.date || todayStr(),
+              date: normalizedDate,
               description: r.description || `이체${r.fromAsset ? ` (${r.fromAsset} → ${r.toAsset || "?"})` : ""}`,
               amount: Math.abs(Number(r.amount) || 0),
               categoryId: uncategorized,
@@ -661,7 +671,7 @@ export default function App() {
           const matchedPm = findPaymentMethodByName(r.payment);
           newTx.push({
             id: uid(),
-            date: r.date || todayStr(),
+            date: normalizedDate,
             description: r.description || "내역 없음",
             amount: Number(r.amount) || 0,
             categoryId: matchedCat ? matchedCat.id : uncategorized,
@@ -678,7 +688,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [categories, paymentMethods, assets, assetTypes, categoryMemory, catMap, findCategoryByName, findPaymentMethodByName, findAssetByName, recallCategory]);
+  }, [categories, paymentMethods, assets, assetTypes, categoryMemory, catMap, findCategoryByName, findPaymentMethodByName, findAssetByName, recallCategory, paydayDom, periodOffset]);
 
   const handlePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
