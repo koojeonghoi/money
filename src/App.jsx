@@ -1162,7 +1162,7 @@ export default function App() {
                               style={{ accentColor: "#C9A227", width: 15, height: 15, flexShrink: 0 }}
                             />
                             <span className="flex-1 min-w-0 truncate" style={{ color: at?.color || "#EDE6D3" }}>{a.name}</span>
-                            <span className="tabular font-semibold flex-shrink-0">{won(a.amount)}</span>
+                            <span className="tabular font-semibold flex-shrink-0">{won(assetBalances[a.id] ?? a.amount)}</span>
                           </label>
                         );
                       })
