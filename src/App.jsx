@@ -13,6 +13,7 @@ const PALETTE = [
 const DEFAULT_CATEGORIES = [
   { id: "salary", name: "급여", emoji: "💵", color: "#C9A227", type: "income" },
   { id: "bonus", name: "상여금", emoji: "🎁", color: "#D9B23C", type: "income" },
+  { id: "apptech", name: "앱테크", emoji: "📲", color: "#8FB339", type: "income" },
   { id: "saving", name: "저축", emoji: "💰", color: "#4E8F72", type: "saving" },
   { id: "installment", name: "적금", emoji: "🏦", color: "#5B8A72", type: "saving" },
   { id: "insurance", name: "보험", emoji: "🛡️", color: "#6B8CAE", type: "fixed" },
@@ -847,7 +848,7 @@ export default function App() {
   const updateTx = (id, patch) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id));
   const handleTxCategoryChange = (tx, newCategoryId) => {
-    const becomesSaving = catMap[newCategoryId]?.type === "saving";
+    const becomesSaving = catMap[newCategoryId]?.type === "saving" || catMap[newCategoryId]?.type === "income";
     updateTx(tx.id, { categoryId: newCategoryId, ...(becomesSaving ? { amount: Math.abs(Number(tx.amount || 0)) } : {}) });
     rememberCategory(tx.description, newCategoryId);
   };
@@ -877,7 +878,7 @@ export default function App() {
     }
     const absAmount = Number(String(manualAmount).replace(/[^0-9]/g, "")) || 0;
     if (!manualDesc.trim() && absAmount === 0) return;
-    const isSavingCat = catMap[manualCatId]?.type === "saving";
+    const isSavingCat = catMap[manualCatId]?.type === "saving" || catMap[manualCatId]?.type === "income";
     const amountNum = isSavingCat ? absAmount : (manualIsIncome ? -absAmount : absAmount);
     const newTx = {
       id: uid(),
@@ -946,7 +947,7 @@ export default function App() {
     };
     transactions.forEach((t) => {
       if (!t.assetId) return;
-      const isSavingCat = catMap[t.categoryId]?.type === "saving";
+      const isSavingCat = catMap[t.categoryId]?.type === "saving" || catMap[t.categoryId]?.type === "income";
       const delta = isSavingCat ? Math.abs(Number(t.amount || 0)) : -Number(t.amount || 0);
       pushLeg(t.assetId, { id: t.id, date: t.date, description: t.description, delta, kind: "tx" });
     });
@@ -1268,11 +1269,11 @@ export default function App() {
                             <span
                               className="text-[10px] font-bold px-1.5 py-0.5 rounded"
                               style={{
-                                background: cat?.type === "saving" ? "rgba(201,162,39,0.15)" : t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
-                                color: cat?.type === "saving" ? "#C9A227" : t.amount < 0 ? "#4E8F72" : "#B5533B"
+                                background: cat?.type === "saving" ? "rgba(201,162,39,0.15)" : cat?.type === "income" ? "rgba(78,143,114,0.15)" : t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
+                                color: cat?.type === "saving" ? "#C9A227" : cat?.type === "income" ? "#4E8F72" : t.amount < 0 ? "#4E8F72" : "#B5533B"
                               }}
                             >
-                              {cat?.type === "saving" ? "저축" : t.amount < 0 ? "입금" : "지출"}
+                              {cat?.type === "saving" ? "저축" : cat?.type === "income" ? "수입" : t.amount < 0 ? "입금" : "지출"}
                             </span>
                             <p className="tabular text-sm font-semibold" style={{ color: "#EDE6D3" }}>{won(Math.abs(t.amount))}</p>
                           </div>
@@ -1637,15 +1638,15 @@ export default function App() {
                             {categories.map((c) => (<option key={c.id} value={c.id}>{labelWithEmoji(c)}</option>))}
                           </select>
                           <button
-                            onClick={() => cat?.type !== "saving" && updateTx(t.id, { amount: -t.amount })}
-                            disabled={cat?.type === "saving"}
+                            onClick={() => cat?.type !== "saving" && cat?.type !== "income" && updateTx(t.id, { amount: -t.amount })}
+                            disabled={cat?.type === "saving" || cat?.type === "income"}
                             className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
                             style={{
-                              background: cat?.type === "saving" ? "rgba(201,162,39,0.15)" : t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
-                              color: cat?.type === "saving" ? "#C9A227" : t.amount < 0 ? "#4E8F72" : "#B5533B"
+                              background: cat?.type === "saving" ? "rgba(201,162,39,0.15)" : cat?.type === "income" ? "rgba(78,143,114,0.15)" : t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
+                              color: cat?.type === "saving" ? "#C9A227" : cat?.type === "income" ? "#4E8F72" : t.amount < 0 ? "#4E8F72" : "#B5533B"
                             }}
                           >
-                            {cat?.type === "saving" ? "저축" : t.amount < 0 ? "입금" : "지출"}
+                            {cat?.type === "saving" ? "저축" : cat?.type === "income" ? "수입" : t.amount < 0 ? "입금" : "지출"}
                           </button>
                           <button
                             onClick={() => convertTransactionToTransfer(t)}
@@ -1662,11 +1663,11 @@ export default function App() {
                             onChange={(e) => {
                               const digitsOnly = e.target.value.replace(/[^0-9]/g, "");
                               const abs = digitsOnly === "" ? 0 : Number(digitsOnly);
-                              const signed = cat?.type === "saving" ? abs : (t.amount < 0 ? -abs : abs);
+                              const signed = (cat?.type === "saving" || cat?.type === "income") ? abs : (t.amount < 0 ? -abs : abs);
                               updateTx(t.id, { amount: signed });
                             }}
                             className="tabular flex-1 min-w-0 bg-transparent outline-none text-sm text-right font-semibold"
-                            style={{ color: cat?.type === "saving" ? "#C9A227" : t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
+                            style={{ color: cat?.type === "saving" ? "#C9A227" : cat?.type === "income" ? "#4E8F72" : t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
                           />
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
