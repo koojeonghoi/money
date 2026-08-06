@@ -920,7 +920,7 @@ export default function App() {
     return categories
       .map((c) => {
         const raw = periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0);
-        return { ...c, total: c.type === "income" ? Math.abs(raw) : raw };
+        return { ...c, total: c.type === "income" ? Math.abs(raw) : c.type === "saving" ? Math.abs(raw) : raw };
       })
       .filter((c) => c.total !== 0);
   }, [categories, periodTransactions]);
@@ -930,7 +930,7 @@ export default function App() {
       const raw = categories
         .filter((c) => c.type === type)
         .reduce((sum, c) => sum + periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0);
-      return { type, label: TYPE_LABEL[type], total: type === "income" ? Math.abs(raw) : raw };
+      return { type, label: TYPE_LABEL[type], total: type === "income" || type === "saving" ? Math.abs(raw) : raw };
     });
   }, [categories, periodTransactions]);
 
@@ -947,7 +947,7 @@ export default function App() {
     transactions.forEach((t) => {
       if (!t.assetId) return;
       const isSavingCat = catMap[t.categoryId]?.type === "saving";
-      const delta = isSavingCat ? Number(t.amount || 0) : -Number(t.amount || 0);
+      const delta = isSavingCat ? Math.abs(Number(t.amount || 0)) : -Number(t.amount || 0);
       pushLeg(t.assetId, { id: t.id, date: t.date, description: t.description, delta, kind: "tx" });
     });
     transfers.forEach((tr) => {
