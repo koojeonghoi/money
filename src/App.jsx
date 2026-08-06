@@ -847,7 +847,8 @@ export default function App() {
   const updateTx = (id, patch) => setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   const deleteTx = (id) => setTransactions((prev) => prev.filter((t) => t.id !== id));
   const handleTxCategoryChange = (tx, newCategoryId) => {
-    updateTx(tx.id, { categoryId: newCategoryId });
+    const becomesSaving = catMap[newCategoryId]?.type === "saving";
+    updateTx(tx.id, { categoryId: newCategoryId, ...(becomesSaving ? { amount: Math.abs(Number(tx.amount || 0)) } : {}) });
     rememberCategory(tx.description, newCategoryId);
   };
 
@@ -876,7 +877,8 @@ export default function App() {
     }
     const absAmount = Number(String(manualAmount).replace(/[^0-9]/g, "")) || 0;
     if (!manualDesc.trim() && absAmount === 0) return;
-    const amountNum = manualIsIncome ? -absAmount : absAmount;
+    const isSavingCat = catMap[manualCatId]?.type === "saving";
+    const amountNum = isSavingCat ? absAmount : (manualIsIncome ? -absAmount : absAmount);
     const newTx = {
       id: uid(),
       date: manualDate || todayStr(),
@@ -944,7 +946,9 @@ export default function App() {
     };
     transactions.forEach((t) => {
       if (!t.assetId) return;
-      pushLeg(t.assetId, { id: t.id, date: t.date, description: t.description, delta: -Number(t.amount || 0), kind: "tx" });
+      const isSavingCat = catMap[t.categoryId]?.type === "saving";
+      const delta = isSavingCat ? Number(t.amount || 0) : -Number(t.amount || 0);
+      pushLeg(t.assetId, { id: t.id, date: t.date, description: t.description, delta, kind: "tx" });
     });
     transfers.forEach((tr) => {
       pushLeg(tr.fromAssetId, { id: `${tr.id}-out`, date: tr.date, description: tr.memo || `${assetMap[tr.toAssetId]?.name || "다른 자산"}(으)로 이체`, delta: -Number(tr.amount || 0), kind: "transfer-out" });
@@ -967,7 +971,7 @@ export default function App() {
       });
     });
     return map;
-  }, [assets, transactions, transfers, assetMap]);
+  }, [assets, transactions, transfers, assetMap, catMap]);
 
   const assetBalances = useMemo(() => {
     const map = {};
@@ -1264,11 +1268,11 @@ export default function App() {
                             <span
                               className="text-[10px] font-bold px-1.5 py-0.5 rounded"
                               style={{
-                                background: t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
-                                color: t.amount < 0 ? "#4E8F72" : "#B5533B"
+                                background: cat?.type === "saving" ? "rgba(201,162,39,0.15)" : t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
+                                color: cat?.type === "saving" ? "#C9A227" : t.amount < 0 ? "#4E8F72" : "#B5533B"
                               }}
                             >
-                              {t.amount < 0 ? "입금" : "지출"}
+                              {cat?.type === "saving" ? "저축" : t.amount < 0 ? "입금" : "지출"}
                             </span>
                             <p className="tabular text-sm font-semibold" style={{ color: "#EDE6D3" }}>{won(Math.abs(t.amount))}</p>
                           </div>
@@ -1633,14 +1637,15 @@ export default function App() {
                             {categories.map((c) => (<option key={c.id} value={c.id}>{labelWithEmoji(c)}</option>))}
                           </select>
                           <button
-                            onClick={() => updateTx(t.id, { amount: -t.amount })}
+                            onClick={() => cat?.type !== "saving" && updateTx(t.id, { amount: -t.amount })}
+                            disabled={cat?.type === "saving"}
                             className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
                             style={{
-                              background: t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
-                              color: t.amount < 0 ? "#4E8F72" : "#B5533B"
+                              background: cat?.type === "saving" ? "rgba(201,162,39,0.15)" : t.amount < 0 ? "rgba(78,143,114,0.15)" : "rgba(181,83,59,0.15)",
+                              color: cat?.type === "saving" ? "#C9A227" : t.amount < 0 ? "#4E8F72" : "#B5533B"
                             }}
                           >
-                            {t.amount < 0 ? "입금" : "지출"}
+                            {cat?.type === "saving" ? "저축" : t.amount < 0 ? "입금" : "지출"}
                           </button>
                           <button
                             onClick={() => convertTransactionToTransfer(t)}
@@ -1657,11 +1662,11 @@ export default function App() {
                             onChange={(e) => {
                               const digitsOnly = e.target.value.replace(/[^0-9]/g, "");
                               const abs = digitsOnly === "" ? 0 : Number(digitsOnly);
-                              const signed = t.amount < 0 ? -abs : abs;
+                              const signed = cat?.type === "saving" ? abs : (t.amount < 0 ? -abs : abs);
                               updateTx(t.id, { amount: signed });
                             }}
                             className="tabular flex-1 min-w-0 bg-transparent outline-none text-sm text-right font-semibold"
-                            style={{ color: t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
+                            style={{ color: cat?.type === "saving" ? "#C9A227" : t.amount < 0 ? "#4E8F72" : "#EDE6D3" }}
                           />
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
