@@ -384,6 +384,7 @@ export default function App() {
   const [transactions, setTransactions] = useState([]);
   const [assets, setAssets] = useState([]);
   const [transfers, setTransfers] = useState([]);
+  const [balanceLogs, setBalanceLogs] = useState([]); // 자산 잔액을 직접(이미지 등으로) 업데이트한 변경 이력
   const [income, setIncome] = useState("");
 
   const [loaded, setLoaded] = useState(false);
@@ -437,7 +438,7 @@ export default function App() {
   const [syncErrorMessage, setSyncErrorMessage] = useState("");
 
   const buildSnapshot = () => ({
-    categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, transfers, income, paydayDom
+    categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, transfers, balanceLogs, income, paydayDom
   });
 
   const applySnapshot = (parsed) => {
@@ -449,6 +450,7 @@ export default function App() {
     if (parsed.transactions) setTransactions(parsed.transactions);
     if (parsed.assets) setAssets(parsed.assets);
     if (parsed.transfers) setTransfers(parsed.transfers);
+    if (parsed.balanceLogs) setBalanceLogs(parsed.balanceLogs);
     if (parsed.income) setIncome(parsed.income);
     if (parsed.paydayDom) setPaydayDom(parsed.paydayDom);
   };
@@ -516,7 +518,7 @@ export default function App() {
       }
     }, 500);
     return () => clearTimeout(saveTimer.current);
-  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, transfers, income, paydayDom, loaded, syncSecret]);
+  }, [categories, paymentMethods, assetTypes, categoryMemory, transactions, assets, transfers, balanceLogs, income, paydayDom, loaded, syncSecret]);
 
   const saveSyncSecret = async () => {
     const trimmed = syncSecretDraft.trim();
@@ -803,9 +805,7 @@ export default function App() {
             if (!uniqueValues.some((u) => u.amount === e.amount && u.date === e.date)) uniqueValues.push(e);
           });
           if (uniqueValues.length === 1) {
-            const patch = { amount: uniqueValues[0].amount };
-            if (uniqueValues[0].date) patch.date = uniqueValues[0].date;
-            updateAsset(assetId, patch);
+            applyAssetBalanceUpdate(assetId, uniqueValues[0].amount, uniqueValues[0].date, "이미지로 잔액 업데이트");
             matchedNames.push(asset.name);
           } else {
             // 같은 자산으로 매칭됐는데 서로 다른 값이 여러 번 읽힘 — 자동으로 아무거나 덮어쓰지 않고 사용자가 고르게 함.
@@ -835,7 +835,7 @@ export default function App() {
     } finally {
       setBalanceLoading(false);
     }
-  }, [assets, assetMap, findAssetsByName, paydayDom, periodOffset]);
+  }, [assets, assetMap, findAssetsByName, applyAssetBalanceUpdate, paydayDom, periodOffset]);
 
   const handleAssetBalancePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
@@ -859,18 +859,14 @@ export default function App() {
   const resolvePendingAssetChoice = (pendingId, chosenAssetId) => {
     const item = pendingBalanceMatches.find((p) => p.id === pendingId);
     if (!item) return;
-    const patch = { amount: item.amount };
-    if (item.date) patch.date = item.date;
-    updateAsset(chosenAssetId, patch);
+    applyAssetBalanceUpdate(chosenAssetId, item.amount, item.date, "이미지로 잔액 업데이트");
     setPendingBalanceMatches((prev) => prev.filter((p) => p.id !== pendingId));
   };
 
   const resolvePendingValueChoice = (pendingId, option) => {
     const item = pendingBalanceMatches.find((p) => p.id === pendingId);
     if (!item) return;
-    const patch = { amount: option.amount };
-    if (option.date) patch.date = option.date;
-    updateAsset(item.assetId, patch);
+    applyAssetBalanceUpdate(item.assetId, option.amount, option.date, "이미지로 잔액 업데이트");
     setPendingBalanceMatches((prev) => prev.filter((p) => p.id !== pendingId));
   };
 
@@ -955,6 +951,19 @@ export default function App() {
     setAssets((prev) => [newAsset, ...prev]);
   };
   const updateAsset = (id, patch) => setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+
+  // 자산 잔액을 덮어쓰면서 동시에 "언제 얼마에서 얼마로 바뀌었는지" 변경 이력을 남긴다.
+  // (이미지로 잔액을 업데이트할 때 쓰임 — 그냥 updateAsset만 하면 변동내역에 안 보임)
+  const applyAssetBalanceUpdate = useCallback((assetId, amount, date, note) => {
+    const prevAmount = Number(assetMap[assetId]?.amount || 0);
+    const patch = { amount };
+    if (date) patch.date = date;
+    updateAsset(assetId, patch);
+    setBalanceLogs((prev) => [
+      ...prev,
+      { id: uid(), assetId, date: date || todayStr(), amount, prevAmount, note: note || "이미지로 잔액 업데이트", createdAt: Date.now() }
+    ]);
+  }, [assetMap]);
   const deleteAsset = (id) => {
     setAssets((prev) => prev.filter((a) => a.id !== id));
     setSelectedAssetIds((prev) => prev.filter((x) => x !== id));
@@ -1109,9 +1118,10 @@ export default function App() {
     });
   }, [categories, periodTransactions]);
 
-  // ---- asset balances: 자산의 "기준 금액"에 그 자산으로 연결된 수입/지출 거래 + 계좌 이체를 누적 반영한 실제 잔액 ----
+  // ---- asset balances: 자산의 "기준 금액"에 그 자산으로 연결된 수입/지출 거래 + 계좌 이체 + 잔액 업데이트(이미지 등)를 시간순으로 누적 반영한 실제 잔액 ----
   // 거래 amount는 지출이면 양수, 입금이면 음수이므로 자산 잔액에는 -amount 만큼 더한다.
   // 이체는 보내는 자산에서 -amount, 받는 자산에서 +amount로 반영한다.
+  // 잔액 업데이트(balanceLogs)는 델타가 아니라 그 시점의 금액을 그대로 덮어쓰는 "절대값" 이벤트다.
   const assetHistoryMap = useMemo(() => {
     const legsByAsset = {};
     const pushLeg = (assetId, leg) => {
@@ -1129,6 +1139,9 @@ export default function App() {
       pushLeg(tr.fromAssetId, { id: `${tr.id}-out`, date: tr.date, description: tr.memo || `${assetMap[tr.toAssetId]?.name || "다른 자산"}(으)로 이체`, delta: -Number(tr.amount || 0), kind: "transfer-out" });
       pushLeg(tr.toAssetId, { id: `${tr.id}-in`, date: tr.date, description: tr.memo || `${assetMap[tr.fromAssetId]?.name || "다른 자산"}에서 이체`, delta: Number(tr.amount || 0), kind: "transfer-in" });
     });
+    balanceLogs.forEach((b) => {
+      pushLeg(b.assetId, { id: b.id, date: b.date, description: b.note || "잔액 업데이트", kind: "balance-set", targetAmount: Number(b.amount || 0) });
+    });
 
     const map = {};
     assets.forEach((a) => {
@@ -1141,12 +1154,17 @@ export default function App() {
         });
       let running = Number(a.amount || 0);
       map[a.id] = linked.map((leg) => {
+        if (leg.kind === "balance-set") {
+          const delta = leg.targetAmount - running;
+          running = leg.targetAmount;
+          return { ...leg, delta, running };
+        }
         running += leg.delta;
         return { ...leg, running };
       });
     });
     return map;
-  }, [assets, transactions, transfers, assetMap, catMap]);
+  }, [assets, transactions, transfers, balanceLogs, assetMap, catMap]);
 
   const assetBalances = useMemo(() => {
     const map = {};
