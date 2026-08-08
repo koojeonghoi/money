@@ -351,6 +351,28 @@ async function extractTransactions(base64, mediaType, categoryNames, paymentMeth
   return data.transactions;
 }
 
+async function extractAssetBalances(base64, mediaType, assetNames) {
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: base64, mediaType, mode: "balance", assetNames })
+  });
+
+  let data;
+  try {
+    data = await response.json();
+  } catch (e) {
+    throw new Error(
+      response.ok
+        ? "서버 응답을 해석하지 못했습니다."
+        : "이미지 용량이 너무 커서 서버가 요청을 처리하지 못했어요. 이미지를 더 작게 나눠서 다시 시도해 주세요."
+    );
+  }
+  if (!response.ok) throw new Error(data.error || `요청 실패 (${response.status})`);
+  if (!Array.isArray(data.balances)) throw new Error("예상한 응답 형식이 아닙니다.");
+  return data.balances;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("home");
 
@@ -401,7 +423,12 @@ export default function App() {
   const [transferAmount, setTransferAmount] = useState("");
   const [transferMemo, setTransferMemo] = useState("");
 
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState("");
+  const [balanceNotice, setBalanceNotice] = useState("");
+
   const fileInputRef = useRef(null);
+  const assetFileInputRef = useRef(null);
   const saveTimer = useRef(null);
   const [syncSecret, setSyncSecret] = useState("");
   const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | synced | error | no-secret
@@ -703,6 +730,67 @@ export default function App() {
       }
     }
   }, [processImageFile]);
+
+  // 자산 잔액 업데이트: 거래 내역이 아니라 "이미 등록된 자산의 현재 금액"을 이미지에서 읽어
+  // 이름이 일치하는 자산의 기준금액/기준일을 그대로 덮어쓴다. (주식/펀드처럼 매번 값이 바뀌는 자산용)
+  const processAssetBalanceImage = useCallback(async (file) => {
+    setBalanceError("");
+    setBalanceNotice("");
+    setBalanceLoading(true);
+    try {
+      const { base64, mediaType } = await prepareImageForUpload(file);
+      const assetNames = assets.map((a) => a.name);
+      const rows = await extractAssetBalances(base64, mediaType, assetNames);
+      if (rows.length === 0) {
+        setBalanceError("이미지에서 자산 금액을 찾지 못했어요. 더 선명한 캡처로 다시 시도해 주세요.");
+      } else {
+        const currentPeriod = getPayPeriodByOffset(paydayDom, periodOffset);
+        const matchedNames = [];
+        const unmatchedNames = [];
+        rows.forEach((r) => {
+          const matched = findAssetByName(r.assetName);
+          const amount = Number(r.amount);
+          if (!matched || !Number.isFinite(amount)) {
+            if (r.assetName) unmatchedNames.push(r.assetName);
+            return;
+          }
+          const parsedDate = parseTxDate(r.date, currentPeriod.start, currentPeriod.end);
+          const patch = { amount };
+          if (parsedDate) patch.date = dateToYmd(parsedDate);
+          updateAsset(matched.id, patch);
+          matchedNames.push(matched.name);
+        });
+        if (matchedNames.length) {
+          setBalanceNotice(`${matchedNames.join(", ")} 금액을 업데이트했어요.${unmatchedNames.length ? ` (일치하는 자산을 찾지 못함: ${unmatchedNames.join(", ")})` : ""}`);
+        } else {
+          setBalanceError(`일치하는 자산을 찾지 못했어요: ${unmatchedNames.join(", ") || "알 수 없음"}. 자산 이름을 이미지 속 표기와 비슷하게 맞춰 주세요.`);
+        }
+      }
+    } catch (e) {
+      setBalanceError(e.message || "이미지를 분석하는 중 문제가 발생했어요. 다시 시도해 주세요.");
+    } finally {
+      setBalanceLoading(false);
+    }
+  }, [assets, findAssetByName, paydayDom, periodOffset]);
+
+  const handleAssetBalancePaste = useCallback((e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) processAssetBalanceImage(file);
+        e.preventDefault();
+        break;
+      }
+    }
+  }, [processAssetBalanceImage]);
+
+  const handleAssetFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (file) processAssetBalanceImage(file);
+    e.target.value = "";
+  };
 
   const handleFileSelect = (e) => {
     const file = e.target.files?.[0];
@@ -1712,6 +1800,46 @@ export default function App() {
               <p className="text-xs font-semibold" style={{ color: "#93A0B8" }}>총 자산</p>
               <p className="tabular text-2xl font-bold mt-1" style={{ color: "#C9A227" }}>{won(totalAssets)}</p>
             </div>
+
+            {/* 자산 잔액 이미지 업데이트: 새 거래를 추가하는 게 아니라, 캡처 이미지 속 금액으로
+                이름이 같은 기존 자산의 현재 금액을 그대로 덮어쓴다. 주식/펀드처럼 값이 계속 바뀌는 자산용. */}
+            <div
+              tabIndex={0}
+              onPaste={handleAssetBalancePaste}
+              className="rounded-2xl p-5 flex flex-col items-center justify-center text-center gap-2.5 outline-none focus:ring-2"
+              style={{ ...card, border: "2px dashed #3A4E6E", minHeight: 140, ringColor: "#C9A227" }}
+            >
+              {balanceLoading ? (
+                <>
+                  <Loader2 size={24} style={{ animation: "spin 1s linear infinite", color: "#C9A227" }} />
+                  <p className="text-sm" style={{ color: "#93A0B8" }}>이미지에서 잔액을 읽는 중...</p>
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={24} style={{ color: "#C9A227" }} />
+                  <p className="text-sm font-medium">자산 잔액 이미지로 업데이트</p>
+                  <p className="text-xs" style={{ color: "#93A0B8" }}>주식·펀드 등 평가금액 캡처를 붙여넣으면 이름이 같은 자산의 금액을 갱신해요</p>
+                  <button
+                    onClick={() => assetFileInputRef.current?.click()}
+                    className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: "#C9A227", color: "#101B2D" }}
+                  >
+                    <Upload size={14} /> 파일에서 선택
+                  </button>
+                  <input ref={assetFileInputRef} type="file" accept="image/*" onChange={handleAssetFileSelect} className="hidden" />
+                </>
+              )}
+            </div>
+            {balanceError && (
+              <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(181,83,59,0.15)", border: "1px solid #B5533B", color: "#E8B4A6" }}>
+                {balanceError}
+              </div>
+            )}
+            {balanceNotice && (
+              <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(78,143,114,0.15)", border: "1px solid #4E8F72", color: "#B7D9C8" }}>
+                {balanceNotice}
+              </div>
+            )}
 
             {assetPieData.length > 0 && (
               <div className="rounded-2xl p-4" style={card}>
