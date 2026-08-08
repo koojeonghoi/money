@@ -426,6 +426,7 @@ export default function App() {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState("");
   const [balanceNotice, setBalanceNotice] = useState("");
+  const [pendingBalanceMatches, setPendingBalanceMatches] = useState([]); // 이름이 겹쳐서 선택이 필요한 항목들
 
   const fileInputRef = useRef(null);
   const assetFileInputRef = useRef(null);
@@ -626,6 +627,19 @@ export default function App() {
     }) || null;
   }, [assets]);
 
+  // findAssetByName과 달리 일치 후보를 전부 반환한다. 같은 이름의 자산이 여러 개 등록돼 있을 때
+  // (예: 같은 종목을 증권사 계좌별로 나눠 등록한 경우) 자동으로 하나를 고르지 않고 사용자에게 선택지를 주기 위함.
+  const findAssetsByName = useCallback((name) => {
+    const target = (name || "").trim().toLowerCase();
+    if (!target) return [];
+    const exact = assets.filter((a) => a.name.trim().toLowerCase() === target);
+    if (exact.length) return exact;
+    return assets.filter((a) => {
+      const n = a.name.trim().toLowerCase();
+      return n && (n.includes(target) || target.includes(n));
+    });
+  }, [assets]);
+
   const processImageFile = useCallback(async (file) => {
     setError("");
     setNotice("");
@@ -733,6 +747,7 @@ export default function App() {
 
   // 자산 잔액 업데이트: 거래 내역이 아니라 "이미 등록된 자산의 현재 금액"을 이미지에서 읽어
   // 이름이 일치하는 자산의 기준금액/기준일을 그대로 덮어쓴다. (주식/펀드처럼 매번 값이 바뀌는 자산용)
+  // 같은 이름의 자산이 여러 개 등록돼 있으면 자동으로 하나를 고르지 않고 사용자에게 선택을 맡긴다.
   const processAssetBalanceImage = useCallback(async (file) => {
     setBalanceError("");
     setBalanceNotice("");
@@ -747,23 +762,42 @@ export default function App() {
         const currentPeriod = getPayPeriodByOffset(paydayDom, periodOffset);
         const matchedNames = [];
         const unmatchedNames = [];
+        const newPending = [];
         rows.forEach((r) => {
-          const matched = findAssetByName(r.assetName);
           const amount = Number(r.amount);
-          if (!matched || !Number.isFinite(amount)) {
+          if (!Number.isFinite(amount)) {
             if (r.assetName) unmatchedNames.push(r.assetName);
             return;
           }
+          const candidates = findAssetsByName(r.assetName);
           const parsedDate = parseTxDate(r.date, currentPeriod.start, currentPeriod.end);
-          const patch = { amount };
-          if (parsedDate) patch.date = dateToYmd(parsedDate);
-          updateAsset(matched.id, patch);
-          matchedNames.push(matched.name);
+          const normalizedDate = parsedDate ? dateToYmd(parsedDate) : "";
+          if (candidates.length === 0) {
+            if (r.assetName) unmatchedNames.push(r.assetName);
+          } else if (candidates.length === 1) {
+            const patch = { amount };
+            if (normalizedDate) patch.date = normalizedDate;
+            updateAsset(candidates[0].id, patch);
+            matchedNames.push(candidates[0].name);
+          } else {
+            newPending.push({
+              id: uid(),
+              assetName: r.assetName,
+              amount,
+              date: normalizedDate,
+              candidateIds: candidates.map((c) => c.id)
+            });
+          }
         });
-        if (matchedNames.length) {
-          setBalanceNotice(`${matchedNames.join(", ")} 금액을 업데이트했어요.${unmatchedNames.length ? ` (일치하는 자산을 찾지 못함: ${unmatchedNames.join(", ")})` : ""}`);
+        if (newPending.length) setPendingBalanceMatches((prev) => [...prev, ...newPending]);
+        const parts = [];
+        if (matchedNames.length) parts.push(`${matchedNames.join(", ")} 금액을 업데이트했어요.`);
+        if (newPending.length) parts.push(`${newPending.length}건은 이름이 같은 자산이 여러 개라 아래에서 골라 주세요.`);
+        if (unmatchedNames.length) parts.push(`일치하는 자산을 찾지 못함: ${unmatchedNames.join(", ")}.`);
+        if (parts.length) {
+          setBalanceNotice(parts.join(" "));
         } else {
-          setBalanceError(`일치하는 자산을 찾지 못했어요: ${unmatchedNames.join(", ") || "알 수 없음"}. 자산 이름을 이미지 속 표기와 비슷하게 맞춰 주세요.`);
+          setBalanceError("반영할 수 있는 항목이 없었어요.");
         }
       }
     } catch (e) {
@@ -771,7 +805,7 @@ export default function App() {
     } finally {
       setBalanceLoading(false);
     }
-  }, [assets, findAssetByName, paydayDom, periodOffset]);
+  }, [assets, findAssetsByName, paydayDom, periodOffset]);
 
   const handleAssetBalancePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
@@ -790,6 +824,19 @@ export default function App() {
     const file = e.target.files?.[0];
     if (file) processAssetBalanceImage(file);
     e.target.value = "";
+  };
+
+  const resolvePendingBalanceMatch = (pendingId, chosenAssetId) => {
+    const item = pendingBalanceMatches.find((p) => p.id === pendingId);
+    if (!item) return;
+    const patch = { amount: item.amount };
+    if (item.date) patch.date = item.date;
+    updateAsset(chosenAssetId, patch);
+    setPendingBalanceMatches((prev) => prev.filter((p) => p.id !== pendingId));
+  };
+
+  const skipPendingBalanceMatch = (pendingId) => {
+    setPendingBalanceMatches((prev) => prev.filter((p) => p.id !== pendingId));
   };
 
   const handleFileSelect = (e) => {
@@ -1838,6 +1885,47 @@ export default function App() {
             {balanceNotice && (
               <div className="rounded-xl px-4 py-3 text-sm" style={{ background: "rgba(78,143,114,0.15)", border: "1px solid #4E8F72", color: "#B7D9C8" }}>
                 {balanceNotice}
+              </div>
+            )}
+            {pendingBalanceMatches.length > 0 && (
+              <div className="rounded-2xl overflow-hidden" style={card}>
+                <div className="px-4 pt-4 pb-2">
+                  <p className="ledger-serif text-lg font-bold" style={{ color: "#C9A227" }}>이름이 겹치는 자산 선택</p>
+                  <p className="text-xs mt-1" style={{ color: "#93A0B8" }}>이미지 속 이름과 일치하는 자산이 여러 개예요. 반영할 자산을 골라 주세요.</p>
+                </div>
+                {pendingBalanceMatches.map((p) => (
+                  <div key={p.id} className="px-4 py-3" style={{ borderTop: "1px solid #1e293b" }}>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <p className="text-sm font-semibold" style={{ color: "#EDE6D3" }}>{p.assetName}</p>
+                      <p className="tabular text-sm font-bold" style={{ color: "#C9A227" }}>{won(p.amount)}</p>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      {p.candidateIds.map((cid) => {
+                        const cand = assetMap[cid];
+                        if (!cand) return null;
+                        const at = assetTypeMap[cand.assetTypeId];
+                        return (
+                          <button
+                            key={cid}
+                            onClick={() => resolvePendingBalanceMatch(p.id, cid)}
+                            className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs text-left"
+                            style={{ background: "#101B2D", border: `1px solid ${at?.color || "#2A3B57"}`, color: "#EDE6D3" }}
+                          >
+                            <span className="truncate">{cand.name} <span style={{ color: at?.color || "#93A0B8" }}>· {at?.name || "미분류"}</span></span>
+                            <span className="tabular flex-shrink-0" style={{ color: "#93A0B8" }}>현재 {won(assetBalances[cid] ?? Number(cand.amount || 0))}</span>
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={() => skipPendingBalanceMatch(p.id)}
+                        className="text-xs mt-0.5 self-start"
+                        style={{ color: "#5A6478" }}
+                      >
+                        건너뛰기
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
