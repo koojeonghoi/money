@@ -747,7 +747,9 @@ export default function App() {
 
   // 자산 잔액 업데이트: 거래 내역이 아니라 "이미 등록된 자산의 현재 금액"을 이미지에서 읽어
   // 이름이 일치하는 자산의 기준금액/기준일을 그대로 덮어쓴다. (주식/펀드처럼 매번 값이 바뀌는 자산용)
-  // 같은 이름의 자산이 여러 개 등록돼 있으면 자동으로 하나를 고르지 않고 사용자에게 선택을 맡긴다.
+  // 두 종류의 충돌을 모두 사용자 선택으로 넘긴다:
+  //  1) 이름이 같은 자산이 여러 개 등록된 경우 (어느 자산인지 모호함)
+  //  2) 이미지 한 장 안에 같은 자산 이름이 여러 번 나와 서로 다른 금액을 읽은 경우 (같은 이름의 계좌가 여러 개라 이미지에 중복 표기된 경우 등 — 마지막 값이 조용히 이전 값을 덮어쓰는 걸 막기 위함)
   const processAssetBalanceImage = useCallback(async (file) => {
     setBalanceError("");
     setBalanceNotice("");
@@ -763,6 +765,8 @@ export default function App() {
         const matchedNames = [];
         const unmatchedNames = [];
         const newPending = [];
+        const bufferByAssetId = {}; // assetId -> [{amount, date, assetName}] — 이번 이미지에서 이 자산으로 매칭된 모든 값
+
         rows.forEach((r) => {
           const amount = Number(r.amount);
           if (!Number.isFinite(amount)) {
@@ -775,13 +779,13 @@ export default function App() {
           if (candidates.length === 0) {
             if (r.assetName) unmatchedNames.push(r.assetName);
           } else if (candidates.length === 1) {
-            const patch = { amount };
-            if (normalizedDate) patch.date = normalizedDate;
-            updateAsset(candidates[0].id, patch);
-            matchedNames.push(candidates[0].name);
+            const id = candidates[0].id;
+            if (!bufferByAssetId[id]) bufferByAssetId[id] = [];
+            bufferByAssetId[id].push({ amount, date: normalizedDate, assetName: r.assetName });
           } else {
             newPending.push({
               id: uid(),
+              type: "assetChoice",
               assetName: r.assetName,
               amount,
               date: normalizedDate,
@@ -789,10 +793,36 @@ export default function App() {
             });
           }
         });
+
+        Object.entries(bufferByAssetId).forEach(([assetId, entries]) => {
+          const asset = assetMap[assetId];
+          if (!asset) return;
+          // 값과 날짜가 완전히 같은 중복 인식은 그냥 하나로 합쳐 바로 반영.
+          const uniqueValues = [];
+          entries.forEach((e) => {
+            if (!uniqueValues.some((u) => u.amount === e.amount && u.date === e.date)) uniqueValues.push(e);
+          });
+          if (uniqueValues.length === 1) {
+            const patch = { amount: uniqueValues[0].amount };
+            if (uniqueValues[0].date) patch.date = uniqueValues[0].date;
+            updateAsset(assetId, patch);
+            matchedNames.push(asset.name);
+          } else {
+            // 같은 자산으로 매칭됐는데 서로 다른 값이 여러 번 읽힘 — 자동으로 아무거나 덮어쓰지 않고 사용자가 고르게 함.
+            newPending.push({
+              id: uid(),
+              type: "valueChoice",
+              assetId,
+              assetName: asset.name,
+              options: uniqueValues
+            });
+          }
+        });
+
         if (newPending.length) setPendingBalanceMatches((prev) => [...prev, ...newPending]);
         const parts = [];
         if (matchedNames.length) parts.push(`${matchedNames.join(", ")} 금액을 업데이트했어요.`);
-        if (newPending.length) parts.push(`${newPending.length}건은 이름이 같은 자산이 여러 개라 아래에서 골라 주세요.`);
+        if (newPending.length) parts.push(`${newPending.length}건은 확인이 필요해서 아래에서 골라 주세요.`);
         if (unmatchedNames.length) parts.push(`일치하는 자산을 찾지 못함: ${unmatchedNames.join(", ")}.`);
         if (parts.length) {
           setBalanceNotice(parts.join(" "));
@@ -805,7 +835,7 @@ export default function App() {
     } finally {
       setBalanceLoading(false);
     }
-  }, [assets, findAssetsByName, paydayDom, periodOffset]);
+  }, [assets, assetMap, findAssetsByName, paydayDom, periodOffset]);
 
   const handleAssetBalancePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
@@ -826,12 +856,21 @@ export default function App() {
     e.target.value = "";
   };
 
-  const resolvePendingBalanceMatch = (pendingId, chosenAssetId) => {
+  const resolvePendingAssetChoice = (pendingId, chosenAssetId) => {
     const item = pendingBalanceMatches.find((p) => p.id === pendingId);
     if (!item) return;
     const patch = { amount: item.amount };
     if (item.date) patch.date = item.date;
     updateAsset(chosenAssetId, patch);
+    setPendingBalanceMatches((prev) => prev.filter((p) => p.id !== pendingId));
+  };
+
+  const resolvePendingValueChoice = (pendingId, option) => {
+    const item = pendingBalanceMatches.find((p) => p.id === pendingId);
+    if (!item) return;
+    const patch = { amount: option.amount };
+    if (option.date) patch.date = option.date;
+    updateAsset(item.assetId, patch);
     setPendingBalanceMatches((prev) => prev.filter((p) => p.id !== pendingId));
   };
 
@@ -1890,40 +1929,71 @@ export default function App() {
             {pendingBalanceMatches.length > 0 && (
               <div className="rounded-2xl overflow-hidden" style={card}>
                 <div className="px-4 pt-4 pb-2">
-                  <p className="ledger-serif text-lg font-bold" style={{ color: "#C9A227" }}>이름이 겹치는 자산 선택</p>
-                  <p className="text-xs mt-1" style={{ color: "#93A0B8" }}>이미지 속 이름과 일치하는 자산이 여러 개예요. 반영할 자산을 골라 주세요.</p>
+                  <p className="ledger-serif text-lg font-bold" style={{ color: "#C9A227" }}>확인이 필요한 항목</p>
+                  <p className="text-xs mt-1" style={{ color: "#93A0B8" }}>자동으로 정하지 않고 골라 주세요.</p>
                 </div>
                 {pendingBalanceMatches.map((p) => (
                   <div key={p.id} className="px-4 py-3" style={{ borderTop: "1px solid #1e293b" }}>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <p className="text-sm font-semibold" style={{ color: "#EDE6D3" }}>{p.assetName}</p>
-                      <p className="tabular text-sm font-bold" style={{ color: "#C9A227" }}>{won(p.amount)}</p>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      {p.candidateIds.map((cid) => {
-                        const cand = assetMap[cid];
-                        if (!cand) return null;
-                        const at = assetTypeMap[cand.assetTypeId];
-                        return (
+                    {p.type === "valueChoice" ? (
+                      <>
+                        <div className="mb-2">
+                          <p className="text-sm font-semibold" style={{ color: "#EDE6D3" }}>{p.assetName}</p>
+                          <p className="text-[11px] mt-0.5" style={{ color: "#93A0B8" }}>이미지 안에 같은 자산 이름이 여러 번 나와서 서로 다른 금액이 읽혔어요. 실제로 별도 계좌라면 자산을 따로 등록해 두면 다음부턴 안 겹쳐요.</p>
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          {p.options.map((opt, i) => (
+                            <button
+                              key={i}
+                              onClick={() => resolvePendingValueChoice(p.id, opt)}
+                              className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs text-left"
+                              style={{ background: "#101B2D", border: "1px solid #2A3B57", color: "#EDE6D3" }}
+                            >
+                              <span>{opt.date || "날짜 미상"}</span>
+                              <span className="tabular font-semibold" style={{ color: "#C9A227" }}>{won(opt.amount)}</span>
+                            </button>
+                          ))}
                           <button
-                            key={cid}
-                            onClick={() => resolvePendingBalanceMatch(p.id, cid)}
-                            className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs text-left"
-                            style={{ background: "#101B2D", border: `1px solid ${at?.color || "#2A3B57"}`, color: "#EDE6D3" }}
+                            onClick={() => skipPendingBalanceMatch(p.id)}
+                            className="text-xs mt-0.5 self-start"
+                            style={{ color: "#5A6478" }}
                           >
-                            <span className="truncate">{cand.name} <span style={{ color: at?.color || "#93A0B8" }}>· {at?.name || "미분류"}</span></span>
-                            <span className="tabular flex-shrink-0" style={{ color: "#93A0B8" }}>현재 {won(assetBalances[cid] ?? Number(cand.amount || 0))}</span>
+                            건너뛰기 (반영 안 함)
                           </button>
-                        );
-                      })}
-                      <button
-                        onClick={() => skipPendingBalanceMatch(p.id)}
-                        className="text-xs mt-0.5 self-start"
-                        style={{ color: "#5A6478" }}
-                      >
-                        건너뛰기
-                      </button>
-                    </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <p className="text-sm font-semibold" style={{ color: "#EDE6D3" }}>{p.assetName}</p>
+                          <p className="tabular text-sm font-bold" style={{ color: "#C9A227" }}>{won(p.amount)}</p>
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          {p.candidateIds.map((cid) => {
+                            const cand = assetMap[cid];
+                            if (!cand) return null;
+                            const at = assetTypeMap[cand.assetTypeId];
+                            return (
+                              <button
+                                key={cid}
+                                onClick={() => resolvePendingAssetChoice(p.id, cid)}
+                                className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs text-left"
+                                style={{ background: "#101B2D", border: `1px solid ${at?.color || "#2A3B57"}`, color: "#EDE6D3" }}
+                              >
+                                <span className="truncate">{cand.name} <span style={{ color: at?.color || "#93A0B8" }}>· {at?.name || "미분류"}</span></span>
+                                <span className="tabular flex-shrink-0" style={{ color: "#93A0B8" }}>현재 {won(assetBalances[cid] ?? Number(cand.amount || 0))}</span>
+                              </button>
+                            );
+                          })}
+                          <button
+                            onClick={() => skipPendingBalanceMatch(p.id)}
+                            className="text-xs mt-0.5 self-start"
+                            style={{ color: "#5A6478" }}
+                          >
+                            건너뛰기
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
