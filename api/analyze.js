@@ -4,8 +4,12 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { image, mediaType, categories, paymentMethods, assetNames, merchantHints } = req.body || {};
-  if (!image || !Array.isArray(categories) || categories.length === 0) {
+  const { image, mediaType, mode, categories, paymentMethods, assetNames, merchantHints } = req.body || {};
+  if (!image) {
+    res.status(400).json({ error: "이미지가 없습니다." });
+    return;
+  }
+  if (mode !== "balance" && (!Array.isArray(categories) || categories.length === 0)) {
     res.status(400).json({ error: "이미지 또는 카테고리 목록이 없습니다." });
     return;
   }
@@ -14,6 +18,10 @@ export default async function handler(req, res) {
   if (!apiKey) {
     res.status(500).json({ error: "서버에 GEMINI_API_KEY 환경변수가 설정되어 있지 않습니다." });
     return;
+  }
+
+  if (mode === "balance") {
+    return handleBalanceMode(req, res, { image, mediaType, assetNames, apiKey });
   }
 
   const pmList = Array.isArray(paymentMethods) && paymentMethods.length ? paymentMethods : ["미지정"];
@@ -98,6 +106,88 @@ export default async function handler(req, res) {
     }
 
     res.status(200).json({ transactions: parsed });
+  } catch (e) {
+    res.status(500).json({ error: e.message || "서버 오류가 발생했습니다." });
+  }
+}
+
+async function handleBalanceMode(req, res, { image, mediaType, assetNames, apiKey }) {
+  const namesList = Array.isArray(assetNames) ? assetNames.filter(Boolean) : [];
+  if (namesList.length === 0) {
+    res.status(400).json({ error: "등록된 자산이 없습니다. 먼저 자산 목록에 항목을 추가해 주세요." });
+    return;
+  }
+
+  const prompt = `다음은 은행/증권/자산관리 앱 등에서 캡처한 잔액(평가금액) 화면 이미지야. 이미지에 보이는 계좌/상품별 현재 금액을 읽어줘.
+
+오직 아래 형식의 순수 JSON 배열만 출력해. 설명이나 다른 텍스트 없이 JSON 배열만.
+
+{"assetName": "사용자가 등록해 둔 자산 이름 목록 중 이미지 속 항목과 가장 가까운 것 그대로", "amount": 정수(원 단위, 쉼표/원 기호 제외, 이미지에 보이는 현재 잔액/평가금액), "date": "이미지에 보이는 기준일/조회일 (없으면 빈 문자열)"}
+
+사용자가 앱에 등록해 둔 자산 이름 목록:
+${namesList.map((n) => `- ${n}`).join("\n")}
+
+규칙:
+- 이미지에 보이는 모든 자산 항목을 빠짐없이 배열에 포함해.
+- assetName은 반드시 위 목록에 있는 이름 중 하나와 최대한 가깝게 그대로 적어. 목록에 있는 어떤 것과도 명확히 대응되지 않으면 이미지에 보이는 이름 그대로 적어.
+- amount는 잔액/평가금액/평가액 등 "현재 총액"에 해당하는 숫자 하나. 매수금액, 수익률, 증감액 같은 부가 수치는 무시해.
+- 텍스트를 읽을 수 없는 이미지면 빈 배열 []을 출력해.`;
+
+  const model = "gemini-3.1-flash-lite";
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { inline_data: { mime_type: mediaType || "image/png", data: image } },
+                { text: prompt }
+              ]
+            }
+          ],
+          generationConfig: {
+            response_mime_type: "application/json",
+            maxOutputTokens: 4096
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      res.status(502).json({ error: `Gemini API 오류: ${errText}` });
+      return;
+    }
+
+    const data = await response.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      res.status(502).json({ error: "응답에서 텍스트를 찾지 못했습니다." });
+      return;
+    }
+
+    const cleaned = text.replace(/```json|```/g, "").trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      res.status(502).json({ error: "응답을 JSON으로 해석하지 못했습니다." });
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      res.status(502).json({ error: "예상한 배열 형식이 아닙니다." });
+      return;
+    }
+
+    res.status(200).json({ balances: parsed });
   } catch (e) {
     res.status(500).json({ error: e.message || "서버 오류가 발생했습니다." });
   }
