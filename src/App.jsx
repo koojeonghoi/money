@@ -385,6 +385,17 @@ export default function App() {
   const [assets, setAssets] = useState([]);
   const [transfers, setTransfers] = useState([]);
   const [balanceLogs, setBalanceLogs] = useState([]); // 자산 잔액을 직접(이미지 등으로) 업데이트한 변경 이력
+  const [dismissedAssetNotices, setDismissedAssetNotices] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("dismissed-asset-notices") || "{}");
+    } catch {
+      return {};
+    }
+  }); // 자산별로 "변경됨" 안내를 닫았는지 기록. { [assetId]: 그 시점 변동내역 건수 }
+
+  useEffect(() => {
+    localStorage.setItem("dismissed-asset-notices", JSON.stringify(dismissedAssetNotices));
+  }, [dismissedAssetNotices]);
   const [income, setIncome] = useState("");
 
   const [loaded, setLoaded] = useState(false);
@@ -952,6 +963,10 @@ export default function App() {
   };
   const updateAsset = (id, patch) => setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
 
+  const dismissAssetNotice = (assetId, historyLength) => {
+    setDismissedAssetNotices((prev) => ({ ...prev, [assetId]: historyLength }));
+  };
+
   // 자산 잔액을 덮어쓰면서 동시에 "언제 얼마에서 얼마로 바뀌었는지" 변경 이력을 남긴다.
   // (이미지로 잔액을 업데이트할 때 쓰임 — 그냥 updateAsset만 하면 변동내역에 안 보임)
   const applyAssetBalanceUpdate = useCallback((assetId, amount, date, note) => {
@@ -1152,12 +1167,27 @@ export default function App() {
           const dy = parseTxDate(y.date) || new Date(0);
           return dx - dy;
         });
+      // 가장 최근 잔액 업데이트(잔액 반영) 시점을 구한다. 그 시점(또는 그 이전)에 걸린 거래/이체는
+      // 이미 그 잔액에 반영되어 있다고 보고 — 즉, 반영 시점이 사용 시점보다 나중이면 — 잔액 계산에서
+      // 다시 차감/가산하지 않는다(중복 반영 방지). 그 시점 이후에 생긴 거래/이체만 잔액에 실제로 반영한다.
+      const resetTimes = linked
+        .filter((l) => l.kind === "balance-set")
+        .map((l) => parseTxDate(l.date)?.getTime())
+        .filter((t) => t != null);
+      const lastResetTime = resetTimes.length ? Math.max(...resetTimes) : null;
+
       let running = Number(a.amount || 0);
       map[a.id] = linked.map((leg) => {
         if (leg.kind === "balance-set") {
           const delta = leg.targetAmount - running;
           running = leg.targetAmount;
           return { ...leg, delta, running };
+        }
+        const legTime = parseTxDate(leg.date)?.getTime();
+        const absorbed = lastResetTime != null && legTime != null && legTime <= lastResetTime;
+        if (absorbed) {
+          // 가장 최근 잔액 업데이트보다 먼저(또는 같은 날) 일어난 거래 — 이미 그 잔액에 반영되어 있으므로 건너뜀
+          return { ...leg, running, absorbed: true };
         }
         running += leg.delta;
         return { ...leg, running };
@@ -1181,7 +1211,8 @@ export default function App() {
       .filter((a) => a.total !== 0);
   }, [assetTypes, assets, assetBalances]);
 
-  // 자산 정렬: 자산 종류(자산 종류 편집에 나열된 순서) → 이름(가나다/ABC) 순으로 항상 자동 정렬.
+  // 자산 정렬: 자산 종류(자산 종류 편집에 나열된 순서) 기준으로 묶고, 그 안에서는 잔액이 많은 것부터
+  // 적은 순으로 정렬. 잔액이 바뀌면(거래/이체/이미지 업데이트 등) 자동으로 다시 정렬된다.
   // 자산 목록 카드, 드롭다운 등 자산이 나열되는 모든 곳에서 이 순서를 그대로 사용한다.
   const sortedAssets = useMemo(() => {
     const typeOrder = Object.fromEntries(assetTypes.map((t, i) => [t.id, i]));
@@ -1189,9 +1220,12 @@ export default function App() {
       const ta = typeOrder[a.assetTypeId] ?? 999;
       const tb = typeOrder[b.assetTypeId] ?? 999;
       if (ta !== tb) return ta - tb;
+      const ba = assetBalances[a.id] ?? Number(a.amount || 0);
+      const bb = assetBalances[b.id] ?? Number(b.amount || 0);
+      if (bb !== ba) return bb - ba;
       return a.name.localeCompare(b.name, "ko");
     });
-  }, [assets, assetTypes]);
+  }, [assets, assetTypes, assetBalances]);
 
   const sortedFilteredAssets = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
@@ -2125,6 +2159,7 @@ export default function App() {
                     const history = assetHistoryMap[a.id] || [];
                     const currentBalance = assetBalances[a.id] ?? Number(a.amount || 0);
                     const changed = currentBalance !== Number(a.amount || 0);
+                    const noticeDismissed = dismissedAssetNotices[a.id] === history.length;
                     const historyOpen = expandedAssetHistoryId === a.id;
                     return (
                       <div key={a.id} className="flex flex-col gap-1.5 px-4 py-2.5" style={{ borderBottom: "1px solid #1e293b", background: selected ? "rgba(201,162,39,0.08)" : "transparent" }}>
@@ -2188,20 +2223,32 @@ export default function App() {
                             style={{ color: "#5A6478" }}
                           />
                         </div>
-                        {changed && (
-                          <p className="text-[11px] pl-6" style={{ color: "#5A6478" }}>
-                            기준금액 {won(a.amount)}에서 연결된 거래 {history.length}건이 반영되어 현재 {won(currentBalance)}이에요.
-                          </p>
+                        {changed && !noticeDismissed && (
+                          <div className="flex items-start justify-between gap-2 pl-6">
+                            <p className="text-[11px]" style={{ color: "#5A6478" }}>
+                              기준금액 {won(a.amount)}에서 연결된 거래 {history.length}건이 반영되어 현재 {won(currentBalance)}이에요.
+                            </p>
+                            <button
+                              onClick={() => dismissAssetNotice(a.id, history.length)}
+                              className="flex-shrink-0 mt-0.5"
+                              style={{ color: "#5A6478" }}
+                              aria-label="안내 닫기"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
                         )}
                         {historyOpen && (
                           <div className="ml-6 mt-1 rounded-lg overflow-hidden" style={{ background: "#101B2D", border: "1px solid #2A3B57" }}>
                             {history.slice().reverse().map((h) => (
-                              <div key={h.id} className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ borderBottom: "1px solid #1e293b" }}>
+                              <div key={h.id} className="flex items-center justify-between px-3 py-1.5 text-xs" style={{ borderBottom: "1px solid #1e293b", opacity: h.absorbed ? 0.5 : 1 }}>
                                 <div className="min-w-0">
-                                  <p className="truncate" style={{ color: "#93A0B8" }}>{h.date} · {h.description}</p>
+                                  <p className="truncate" style={{ color: "#93A0B8" }}>
+                                    {h.date} · {h.description}{h.absorbed ? " · 잔액에 반영 안 됨(이미 포함됨)" : ""}
+                                  </p>
                                 </div>
                                 <div className="flex items-center gap-2 flex-shrink-0">
-                                  <span className="tabular font-semibold" style={{ color: h.delta >= 0 ? "#4E8F72" : "#B5533B" }}>
+                                  <span className="tabular font-semibold" style={{ color: h.absorbed ? "#5A6478" : (h.delta >= 0 ? "#4E8F72" : "#B5533B") }}>
                                     {h.delta >= 0 ? "+" : ""}{won(h.delta)}
                                   </span>
                                   <span className="tabular" style={{ color: "#5A6478" }}>{won(h.running)}</span>
