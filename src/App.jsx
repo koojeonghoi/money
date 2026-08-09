@@ -758,6 +758,21 @@ export default function App() {
     }
   }, [processImageFile]);
 
+  const updateAsset = (id, patch) => setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+
+  // 자산 잔액을 덮어쓰면서 동시에 "언제 얼마에서 얼마로 바뀌었는지" 변경 이력을 남긴다.
+  // (이미지로 잔액을 업데이트할 때 쓰임 — 그냥 updateAsset만 하면 변동내역에 안 보임)
+  const applyAssetBalanceUpdate = useCallback((assetId, amount, date, note) => {
+    const prevAmount = Number(assetMap[assetId]?.amount || 0);
+    const patch = { amount };
+    if (date) patch.date = date;
+    updateAsset(assetId, patch);
+    setBalanceLogs((prev) => [
+      ...prev,
+      { id: uid(), assetId, date: date || todayStr(), amount, prevAmount, note: note || "이미지로 잔액 업데이트", createdAt: Date.now() }
+    ]);
+  }, [assetMap]);
+
   // 자산 잔액 업데이트: 거래 내역이 아니라 "이미 등록된 자산의 현재 금액"을 이미지에서 읽어
   // 이름이 일치하는 자산의 기준금액/기준일을 그대로 덮어쓴다. (주식/펀드처럼 매번 값이 바뀌는 자산용)
   // 두 종류의 충돌을 모두 사용자 선택으로 넘긴다:
@@ -961,24 +976,10 @@ export default function App() {
     const newAsset = { id: uid(), name: "새 자산", assetTypeId: assetTypes[0]?.id || "", amount: 0, date: todayStr() };
     setAssets((prev) => [newAsset, ...prev]);
   };
-  const updateAsset = (id, patch) => setAssets((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-
   const dismissAssetNotice = (assetId, historyLength) => {
     setDismissedAssetNotices((prev) => ({ ...prev, [assetId]: historyLength }));
   };
 
-  // 자산 잔액을 덮어쓰면서 동시에 "언제 얼마에서 얼마로 바뀌었는지" 변경 이력을 남긴다.
-  // (이미지로 잔액을 업데이트할 때 쓰임 — 그냥 updateAsset만 하면 변동내역에 안 보임)
-  const applyAssetBalanceUpdate = useCallback((assetId, amount, date, note) => {
-    const prevAmount = Number(assetMap[assetId]?.amount || 0);
-    const patch = { amount };
-    if (date) patch.date = date;
-    updateAsset(assetId, patch);
-    setBalanceLogs((prev) => [
-      ...prev,
-      { id: uid(), assetId, date: date || todayStr(), amount, prevAmount, note: note || "이미지로 잔액 업데이트", createdAt: Date.now() }
-    ]);
-  }, [assetMap]);
   const deleteAsset = (id) => {
     setAssets((prev) => prev.filter((a) => a.id !== id));
     setSelectedAssetIds((prev) => prev.filter((x) => x !== id));
