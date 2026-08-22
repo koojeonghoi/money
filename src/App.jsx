@@ -1251,25 +1251,27 @@ export default function App() {
           const dy = parseTxDate(y.date) || new Date(0);
           return dx - dy;
         });
-      // 가장 최근 "리셋 시점"(잔액 업데이트 또는 기준금액/기준일 직접 수정)을 구한다. 그 시점(또는 그 이전)에
-      // 걸린 거래/이체는 이미 그 금액에 반영되어 있다고 보고 — 즉, 반영 시점이 사용 시점보다 나중이면 — 잔액
-      // 계산에서 다시 차감/가산하지 않는다(중복 반영 방지). 그 시점 이후에 생긴 거래/이체만 잔액에 실제로 반영한다.
-      // 기준금액/기준일도 "그 시점의 절대값"이라는 점에서 잔액 업데이트(balance-set)와 동일하게 취급한다 —
-      // 그래야 기준금액을 새로 입력했을 때(기준일도 오늘로 갱신됨) 과거 변동내역에 가려지지 않고 즉시 반영된다.
-      const baseTime = parseTxDate(a.date)?.getTime() ?? null;
-      const resetTimes = linked
+      // "리셋" 후보 두 가지: (1) 자산의 기준금액(baseUpdatedAt에 실제 수정 시각 기록됨),
+      // (2) 변동내역의 잔액 업데이트(balance-set, createdAt에 실제 기록 시각 있음).
+      // 같은 날짜에 여러 번 수정한 경우 날짜만으로는 어느 게 더 나중인지 알 수 없으므로,
+      // 실제 밀리초 타임스탬프(ts)로 비교해서 진짜 가장 최근 것을 승자로 정한다.
+      const baseTs = a.baseUpdatedAt ?? parseTxDate(a.date)?.getTime() ?? 0;
+      let winner = { ts: baseTs, date: a.date, amount: Number(a.amount || 0) };
+      linked
         .filter((l) => l.kind === "balance-set")
-        .map((l) => parseTxDate(l.date)?.getTime())
-        .filter((t) => t != null);
-      if (baseTime != null) resetTimes.push(baseTime);
-      const lastResetTime = resetTimes.length ? Math.max(...resetTimes) : null;
+        .forEach((l) => {
+          const ts = l.createdAt ?? parseTxDate(l.date)?.getTime() ?? 0;
+          if (ts >= winner.ts) winner = { ts, date: l.date, amount: l.targetAmount };
+        });
+      const lastResetTime = parseTxDate(winner.date)?.getTime() ?? null;
 
-      let running = Number(a.amount || 0);
+      let running = winner.amount;
       map[a.id] = linked.map((leg) => {
         const legTime = parseTxDate(leg.date)?.getTime();
         if (leg.kind === "balance-set") {
-          // 이 잔액 업데이트보다 더 나중의 리셋(기준금액 수정 등)이 있으면 이 항목은 건너뛴다.
-          const absorbed = lastResetTime != null && legTime != null && legTime < lastResetTime;
+          const legTs = leg.createdAt ?? legTime ?? 0;
+          // 승자(가장 최근 리셋)보다 실제로 먼저 일어난 잔액 업데이트는 건너뛴다.
+          const absorbed = legTs < winner.ts;
           if (absorbed) {
             return { ...leg, running, absorbed: true };
           }
@@ -2298,7 +2300,7 @@ export default function App() {
                           <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>기준금액</span>
                           <BaseAmountField
                             amount={a.amount}
-                            onCommit={(newAmount) => updateAsset(a.id, { amount: newAmount, date: todayStr() })}
+                            onCommit={(newAmount) => updateAsset(a.id, { amount: newAmount, date: todayStr(), baseUpdatedAt: Date.now() })}
                           />
                           <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>기준일</span>
                           <input
