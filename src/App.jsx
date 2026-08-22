@@ -373,6 +373,89 @@ async function extractAssetBalances(base64, mediaType, assetNames) {
   return data.balances;
 }
 
+// 타이핑할 때마다 거대한 App 전체가 리렌더링되면 모바일에서 렌더링이 밀리면서
+// 한글 조합 문자가 중복 입력되거나(IME composition 이슈), 다 입력하기 전에
+// 포커스가 풀려 값이 날아가는 문제가 있었다. 이 컴포넌트들은 타이핑 중엔 자기
+// 자신만 리렌더링되도록 로컬 상태로 값을 들고 있다가, blur(또는 지정된 시점)에만
+// 한 번 상위 상태(assets 등)로 커밋한다.
+function LocalTextField({ value, onCommit, ...props }) {
+  const [local, setLocal] = useState(value ?? "");
+  useEffect(() => { setLocal(value ?? ""); }, [value]);
+  return (
+    <input
+      {...props}
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={(e) => {
+        if (local !== (value ?? "")) onCommit(local);
+        if (props.onBlur) props.onBlur(e);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.target.blur();
+        if (props.onKeyDown) props.onKeyDown(e);
+      }}
+    />
+  );
+}
+
+// 검색창은 입력할 때마다 목록이 즉시 필터링돼야 하므로 blur까지 기다리지 않고
+// 짧은 디바운스(입력이 잠깐 멈췄을 때)로 상위 상태에 반영한다. 이렇게 하면
+// 키 입력 자체는 이 컴포넌트 로컬 상태만 바꾸므로 앱 전체 리렌더링 없이 빠르다.
+function DebouncedSearchField({ value, onCommit, delay = 200, ...props }) {
+  const [local, setLocal] = useState(value ?? "");
+  const timerRef = useRef(null);
+  useEffect(() => { setLocal(value ?? ""); }, [value]);
+  return (
+    <input
+      {...props}
+      value={local}
+      onChange={(e) => {
+        const v = e.target.value;
+        setLocal(v);
+        clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => onCommit(v), delay);
+      }}
+      onBlur={(e) => {
+        clearTimeout(timerRef.current);
+        if (local !== (value ?? "")) onCommit(local);
+        if (props.onBlur) props.onBlur(e);
+      }}
+    />
+  );
+}
+
+// 기준금액은 숫자 포맷(콤마)까지 처리해야 해서 별도 컴포넌트로 분리.
+// blur 시점에만 실제 금액을 커밋하고, 값이 실제로 바뀐 경우에만 기준일을 오늘로 갱신해서
+// 변동내역(거래/이체/OCR 잔액업데이트)에 가려지지 않고 즉시 현재 잔액에 반영되게 한다.
+function BaseAmountField({ amount, onCommit }) {
+  const [local, setLocal] = useState(() => Number(amount || 0).toLocaleString("ko-KR"));
+  const initialRef = useRef(Number(amount || 0));
+  useEffect(() => {
+    setLocal(Number(amount || 0).toLocaleString("ko-KR"));
+  }, [amount]);
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={local}
+      onFocus={() => { initialRef.current = Number(amount || 0); }}
+      onChange={(e) => {
+        const digitsOnly = e.target.value.replace(/[^0-9-]/g, "");
+        setLocal(digitsOnly === "" ? "" : Number(digitsOnly).toLocaleString("ko-KR"));
+      }}
+      onBlur={() => {
+        const digitsOnly = local.replace(/[^0-9-]/g, "");
+        const newAmount = digitsOnly === "" ? 0 : Number(digitsOnly);
+        setLocal(newAmount.toLocaleString("ko-KR"));
+        if (newAmount !== initialRef.current) onCommit(newAmount, true);
+      }}
+      onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+      className="tabular w-24 flex-shrink-0 bg-transparent outline-none text-xs text-right"
+      style={{ color: "#93A0B8" }}
+    />
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("home");
 
@@ -2137,10 +2220,10 @@ export default function App() {
                 </button>
               </div>
               <div className="px-4 pb-2">
-                <input
+                <DebouncedSearchField
                   type="text"
                   value={assetSearch}
-                  onChange={(e) => setAssetSearch(e.target.value)}
+                  onCommit={setAssetSearch}
                   placeholder="자산 이름 검색"
                   className="w-full rounded-lg px-3 py-2 text-sm outline-none"
                   style={inputStyle}
@@ -2181,9 +2264,9 @@ export default function App() {
                             className="flex-shrink-0"
                             style={{ accentColor: "#C9A227", width: 16, height: 16 }}
                           />
-                          <input
+                          <LocalTextField
                             value={a.name}
-                            onChange={(e) => updateAsset(a.id, { name: e.target.value })}
+                            onCommit={(v) => updateAsset(a.id, { name: v })}
                             className="flex-1 min-w-0 bg-transparent outline-none text-sm truncate"
                             style={{ color: "#EDE6D3" }}
                           />
@@ -2213,25 +2296,9 @@ export default function App() {
                         </div>
                         <div className="flex items-center gap-2 pl-6">
                           <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>기준금액</span>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={Number(a.amount || 0).toLocaleString("ko-KR")}
-                            onFocus={(e) => { e.target.dataset.initial = String(a.amount || 0); }}
-                            onChange={(e) => {
-                              const digitsOnly = e.target.value.replace(/[^0-9-]/g, "");
-                              updateAsset(a.id, { amount: digitsOnly === "" ? 0 : Number(digitsOnly) });
-                            }}
-                            onBlur={(e) => {
-                              // 기준금액을 실제로 바꿨을 때만 기준일을 오늘로 갱신 — 그래야 이 값이
-                              // 과거 변동내역(잔액 업데이트/거래)에 가려지지 않고 즉시 현재 잔액에 반영된다.
-                              const initial = Number(e.target.dataset.initial || 0);
-                              if (Number(a.amount || 0) !== initial) {
-                                updateAsset(a.id, { date: todayStr() });
-                              }
-                            }}
-                            className="tabular w-24 flex-shrink-0 bg-transparent outline-none text-xs text-right"
-                            style={{ color: "#93A0B8" }}
+                          <BaseAmountField
+                            amount={a.amount}
+                            onCommit={(newAmount) => updateAsset(a.id, { amount: newAmount, date: todayStr() })}
                           />
                           <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>기준일</span>
                           <input
