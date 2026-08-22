@@ -11,3 +11,17 @@ html, body, #root {
 body {
   -webkit-font-smoothing: antialiased;
 }
+
+/* iOS Safari는 포커스된 input/select/textarea의 font-size가 16px보다 작으면
+   자동으로 화면을 확대한다. 작은 글씨(text-xs 등)를 쓰는 입력창이 많아서
+   입력할 때마다 화면이 확대됐다가 다시 줄여야 하는 문제가 있었음 —
+   모바일 화면에서 입력 요소의 font-size를 16px로 올려서 확대 자체를 막는다.
+   (입력창 안의 글씨가 살짝 커 보일 수 있는데, 좁은 입력창에서 글자가 잘리면
+   해당 입력창의 너비(w-16/w-20 등)를 조금 늘려주면 됨) */
+@media (max-width: 768px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
