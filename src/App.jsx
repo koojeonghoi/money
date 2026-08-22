@@ -1168,26 +1168,35 @@ export default function App() {
           const dy = parseTxDate(y.date) || new Date(0);
           return dx - dy;
         });
-      // 가장 최근 잔액 업데이트(잔액 반영) 시점을 구한다. 그 시점(또는 그 이전)에 걸린 거래/이체는
-      // 이미 그 잔액에 반영되어 있다고 보고 — 즉, 반영 시점이 사용 시점보다 나중이면 — 잔액 계산에서
-      // 다시 차감/가산하지 않는다(중복 반영 방지). 그 시점 이후에 생긴 거래/이체만 잔액에 실제로 반영한다.
+      // 가장 최근 "리셋 시점"(잔액 업데이트 또는 기준금액/기준일 직접 수정)을 구한다. 그 시점(또는 그 이전)에
+      // 걸린 거래/이체는 이미 그 금액에 반영되어 있다고 보고 — 즉, 반영 시점이 사용 시점보다 나중이면 — 잔액
+      // 계산에서 다시 차감/가산하지 않는다(중복 반영 방지). 그 시점 이후에 생긴 거래/이체만 잔액에 실제로 반영한다.
+      // 기준금액/기준일도 "그 시점의 절대값"이라는 점에서 잔액 업데이트(balance-set)와 동일하게 취급한다 —
+      // 그래야 기준금액을 새로 입력했을 때(기준일도 오늘로 갱신됨) 과거 변동내역에 가려지지 않고 즉시 반영된다.
+      const baseTime = parseTxDate(a.date)?.getTime() ?? null;
       const resetTimes = linked
         .filter((l) => l.kind === "balance-set")
         .map((l) => parseTxDate(l.date)?.getTime())
         .filter((t) => t != null);
+      if (baseTime != null) resetTimes.push(baseTime);
       const lastResetTime = resetTimes.length ? Math.max(...resetTimes) : null;
 
       let running = Number(a.amount || 0);
       map[a.id] = linked.map((leg) => {
+        const legTime = parseTxDate(leg.date)?.getTime();
         if (leg.kind === "balance-set") {
+          // 이 잔액 업데이트보다 더 나중의 리셋(기준금액 수정 등)이 있으면 이 항목은 건너뛴다.
+          const absorbed = lastResetTime != null && legTime != null && legTime < lastResetTime;
+          if (absorbed) {
+            return { ...leg, running, absorbed: true };
+          }
           const delta = leg.targetAmount - running;
           running = leg.targetAmount;
           return { ...leg, delta, running };
         }
-        const legTime = parseTxDate(leg.date)?.getTime();
         const absorbed = lastResetTime != null && legTime != null && legTime <= lastResetTime;
         if (absorbed) {
-          // 가장 최근 잔액 업데이트보다 먼저(또는 같은 날) 일어난 거래 — 이미 그 잔액에 반영되어 있으므로 건너뜀
+          // 가장 최근 리셋(잔액 업데이트/기준금액 수정)보다 먼저(또는 같은 날) 일어난 거래 — 이미 반영되어 있으므로 건너뜀
           return { ...leg, running, absorbed: true };
         }
         running += leg.delta;
@@ -2208,9 +2217,18 @@ export default function App() {
                             type="text"
                             inputMode="numeric"
                             value={Number(a.amount || 0).toLocaleString("ko-KR")}
+                            onFocus={(e) => { e.target.dataset.initial = String(a.amount || 0); }}
                             onChange={(e) => {
                               const digitsOnly = e.target.value.replace(/[^0-9-]/g, "");
                               updateAsset(a.id, { amount: digitsOnly === "" ? 0 : Number(digitsOnly) });
+                            }}
+                            onBlur={(e) => {
+                              // 기준금액을 실제로 바꿨을 때만 기준일을 오늘로 갱신 — 그래야 이 값이
+                              // 과거 변동내역(잔액 업데이트/거래)에 가려지지 않고 즉시 현재 잔액에 반영된다.
+                              const initial = Number(e.target.dataset.initial || 0);
+                              if (Number(a.amount || 0) !== initial) {
+                                updateAsset(a.id, { date: todayStr() });
+                              }
                             }}
                             className="tabular w-24 flex-shrink-0 bg-transparent outline-none text-xs text-right"
                             style={{ color: "#93A0B8" }}
