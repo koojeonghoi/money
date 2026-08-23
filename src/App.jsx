@@ -425,14 +425,27 @@ function DebouncedSearchField({ value, onCommit, delay = 200, ...props }) {
 }
 
 // 기준금액은 숫자 포맷(콤마)까지 처리해야 해서 별도 컴포넌트로 분리.
-// blur 시점에만 실제 금액을 커밋하고, 값이 실제로 바뀐 경우에만 기준일을 오늘로 갱신해서
-// 변동내역(거래/이체/OCR 잔액업데이트)에 가려지지 않고 즉시 현재 잔액에 반영되게 한다.
+// blur뿐 아니라 타이핑이 멈추고 잠깐(600ms) 지나면 자동으로도 커밋한다 — 모바일에서
+// blur 이벤트가 원하는 타이밍에 발생하지 않아 값이 반영 안 되는 경우를 막기 위함.
+// 값이 실제로 바뀐 경우에만 기준일/타임스탬프를 갱신해서 변동내역(거래/이체/OCR 잔액업데이트)에
+// 가려지지 않고 즉시 현재 잔액에 반영되게 한다.
 function BaseAmountField({ amount, onCommit }) {
   const [local, setLocal] = useState(() => Number(amount || 0).toLocaleString("ko-KR"));
   const initialRef = useRef(Number(amount || 0));
+  const committedRef = useRef(Number(amount || 0));
+  const timerRef = useRef(null);
   useEffect(() => {
     setLocal(Number(amount || 0).toLocaleString("ko-KR"));
+    committedRef.current = Number(amount || 0);
   }, [amount]);
+
+  const commitIfChanged = (newAmount) => {
+    if (newAmount !== initialRef.current && newAmount !== committedRef.current) {
+      committedRef.current = newAmount;
+      onCommit(newAmount, true);
+    }
+  };
+
   return (
     <input
       type="text"
@@ -441,13 +454,19 @@ function BaseAmountField({ amount, onCommit }) {
       onFocus={() => { initialRef.current = Number(amount || 0); }}
       onChange={(e) => {
         const digitsOnly = e.target.value.replace(/[^0-9-]/g, "");
-        setLocal(digitsOnly === "" ? "" : Number(digitsOnly).toLocaleString("ko-KR"));
+        const formatted = digitsOnly === "" ? "" : Number(digitsOnly).toLocaleString("ko-KR");
+        setLocal(formatted);
+        clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => {
+          commitIfChanged(digitsOnly === "" ? 0 : Number(digitsOnly));
+        }, 600);
       }}
       onBlur={() => {
+        clearTimeout(timerRef.current);
         const digitsOnly = local.replace(/[^0-9-]/g, "");
         const newAmount = digitsOnly === "" ? 0 : Number(digitsOnly);
         setLocal(newAmount.toLocaleString("ko-KR"));
-        if (newAmount !== initialRef.current) onCommit(newAmount, true);
+        commitIfChanged(newAmount);
       }}
       onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
       className="tabular w-24 flex-shrink-0 bg-transparent outline-none text-xs text-right"
@@ -1267,10 +1286,11 @@ export default function App() {
 
       let running = winner.amount;
       map[a.id] = linked.map((leg) => {
-        const legTime = parseTxDate(leg.date)?.getTime();
+        // 날짜를 못 읽는 이상한 값이면 "아주 예전"(0)으로 취급 — 그래야 리셋에 흡수되지,
+        // "리셋보다 항상 나중"처럼 취급돼서 절대 흡수 안 되는 구멍이 생기지 않는다.
+        const legTime = parseTxDate(leg.date)?.getTime() ?? 0;
         if (leg.kind === "balance-set") {
-          const legTs = leg.createdAt ?? legTime ?? 0;
-          // 승자(가장 최근 리셋)보다 실제로 먼저 일어난 잔액 업데이트는 건너뛴다.
+          const legTs = leg.createdAt ?? legTime;
           const absorbed = legTs < winner.ts;
           if (absorbed) {
             return { ...leg, running, absorbed: true };
@@ -1279,7 +1299,7 @@ export default function App() {
           running = leg.targetAmount;
           return { ...leg, delta, running };
         }
-        const absorbed = lastResetTime != null && legTime != null && legTime <= lastResetTime;
+        const absorbed = lastResetTime != null && legTime <= lastResetTime;
         if (absorbed) {
           // 가장 최근 리셋(잔액 업데이트/기준금액 수정)보다 먼저(또는 같은 날) 일어난 거래 — 이미 반영되어 있으므로 건너뜀
           return { ...leg, running, absorbed: true };
