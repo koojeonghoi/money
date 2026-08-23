@@ -1251,11 +1251,11 @@ export default function App() {
       if (!t.assetId) return;
       const isSavingCat = catMap[t.categoryId]?.type === "saving" || catMap[t.categoryId]?.type === "income";
       const delta = isSavingCat ? Math.abs(Number(t.amount || 0)) : -Number(t.amount || 0);
-      pushLeg(t.assetId, { id: t.id, date: t.date, description: t.description, delta, kind: "tx" });
+      pushLeg(t.assetId, { id: t.id, date: t.date, createdAt: t.createdAt, description: t.description, delta, kind: "tx" });
     });
     transfers.forEach((tr) => {
-      pushLeg(tr.fromAssetId, { id: `${tr.id}-out`, date: tr.date, description: tr.memo || `${assetMap[tr.toAssetId]?.name || "다른 자산"}(으)로 이체`, delta: -Number(tr.amount || 0), kind: "transfer-out" });
-      pushLeg(tr.toAssetId, { id: `${tr.id}-in`, date: tr.date, description: tr.memo || `${assetMap[tr.fromAssetId]?.name || "다른 자산"}에서 이체`, delta: Number(tr.amount || 0), kind: "transfer-in" });
+      pushLeg(tr.fromAssetId, { id: `${tr.id}-out`, date: tr.date, createdAt: tr.createdAt, description: tr.memo || `${assetMap[tr.toAssetId]?.name || "다른 자산"}(으)로 이체`, delta: -Number(tr.amount || 0), kind: "transfer-out" });
+      pushLeg(tr.toAssetId, { id: `${tr.id}-in`, date: tr.date, createdAt: tr.createdAt, description: tr.memo || `${assetMap[tr.fromAssetId]?.name || "다른 자산"}에서 이체`, delta: Number(tr.amount || 0), kind: "transfer-in" });
     });
     balanceLogs.forEach((b) => {
       pushLeg(b.assetId, { id: b.id, date: b.date, description: b.note || "잔액 업데이트", kind: "balance-set", targetAmount: Number(b.amount || 0) });
@@ -1268,30 +1268,33 @@ export default function App() {
         .sort((x, y) => {
           const dx = parseTxDate(x.date) || new Date(0);
           const dy = parseTxDate(y.date) || new Date(0);
-          return dx - dy;
+          const dd = dx - dy;
+          if (dd !== 0) return dd;
+          return (x.createdAt || 0) - (y.createdAt || 0);
         });
       // "리셋" 후보 두 가지: (1) 자산의 기준금액(baseUpdatedAt에 실제 수정 시각 기록됨),
       // (2) 변동내역의 잔액 업데이트(balance-set, createdAt에 실제 기록 시각 있음).
       // 같은 날짜에 여러 번 수정한 경우 날짜만으로는 어느 게 더 나중인지 알 수 없으므로,
       // 실제 밀리초 타임스탬프(ts)로 비교해서 진짜 가장 최근 것을 승자로 정한다.
       const baseTs = a.baseUpdatedAt ?? parseTxDate(a.date)?.getTime() ?? 0;
-      let winner = { ts: baseTs, date: a.date, amount: Number(a.amount || 0) };
+      let winner = { ts: baseTs, amount: Number(a.amount || 0) };
       linked
         .filter((l) => l.kind === "balance-set")
         .forEach((l) => {
           const ts = l.createdAt ?? parseTxDate(l.date)?.getTime() ?? 0;
-          if (ts >= winner.ts) winner = { ts, date: l.date, amount: l.targetAmount };
+          if (ts >= winner.ts) winner = { ts, amount: l.targetAmount };
         });
-      const lastResetTime = parseTxDate(winner.date)?.getTime() ?? null;
 
       let running = winner.amount;
       map[a.id] = linked.map((leg) => {
-        // 날짜를 못 읽는 이상한 값이면 "아주 예전"(0)으로 취급 — 그래야 리셋에 흡수되지,
-        // "리셋보다 항상 나중"처럼 취급돼서 절대 흡수 안 되는 구멍이 생기지 않는다.
-        const legTime = parseTxDate(leg.date)?.getTime() ?? 0;
+        // 거래/이체/잔액업데이트 "자체의 날짜"(예: 어제 쓴 돈)가 아니라, 실제로 언제 "입력"했는지(createdAt)로
+        // 기준금액 리셋보다 전인지 후인지를 가린다. 그래야 기준금액을 오늘 고친 뒤에 어제 지출을 뒤늦게
+        // 입력해도, 그 지출은 리셋 이후에 입력된 것이므로 잔액에 정상적으로 반영된다.
+        // (날짜만 못 읽는 옛날 데이터는 날짜를 기준시각으로 대신 사용)
+        const legDay = parseTxDate(leg.date)?.getTime() ?? 0;
+        const legTs = leg.createdAt ?? legDay;
+        const absorbed = legTs < winner.ts;
         if (leg.kind === "balance-set") {
-          const legTs = leg.createdAt ?? legTime;
-          const absorbed = legTs < winner.ts;
           if (absorbed) {
             return { ...leg, running, absorbed: true };
           }
@@ -1299,9 +1302,8 @@ export default function App() {
           running = leg.targetAmount;
           return { ...leg, delta, running };
         }
-        const absorbed = lastResetTime != null && legTime <= lastResetTime;
         if (absorbed) {
-          // 가장 최근 리셋(잔액 업데이트/기준금액 수정)보다 먼저(또는 같은 날) 일어난 거래 — 이미 반영되어 있으므로 건너뜀
+          // 가장 최근 리셋(잔액 업데이트/기준금액 수정)보다 먼저 입력된 거래 — 이미 반영되어 있으므로 건너뜀
           return { ...leg, running, absorbed: true };
         }
         running += leg.delta;
