@@ -30,7 +30,7 @@ export default async function handler(req, res) {
     : "";
   const assetNamesList = Array.isArray(assetNames) ? assetNames.filter(Boolean) : [];
   const assetHintsText = assetNamesList.length
-    ? `\n\n참고: 사용자가 앱에 등록해 둔 자산(계좌/상품) 이름 목록이야. 이체의 보내는/받는 쪽을 적을 때 아래 목록에 있는 이름과 같거나 가장 가까운 것을 그대로 써:\n${assetNamesList.map((n) => `- ${n}`).join("\n")}`
+    ? `\n\n참고: 사용자가 앱에 등록해 둔 자산(계좌/카드/상품) 이름 목록이야. 이체의 보내는/받는 쪽, 그리고 일반 거래의 asset(사용한 카드/계좌)을 적을 때 아래 목록에 있는 이름과 같거나 가장 가까운 것을 그대로 써:\n${assetNamesList.map((n) => `- ${n}`).join("\n")}`
     : "";
 
   const prompt = `다음은 카드 사용 내역 또는 가계부 캡처 이미지야. 이미지에서 보이는 모든 거래 내역을 읽어줘.
@@ -38,7 +38,7 @@ export default async function handler(req, res) {
 오직 아래 형식의 순수 JSON 배열만 출력해. 설명이나 다른 텍스트 없이 JSON 배열만.
 
 일반 지출/입금:
-{"type": "normal", "date": "이미지에 보이는 날짜 그대로 (없으면 빈 문자열)", "description": "가맹점명 또는 내역명", "amount": 정수(원 단위, 쉼표/원 기호 제외), "category": "다음 중 하나: ${categories.join(", ")}", "payment": "다음 중 하나 (보이지 않으면 \\"미지정\\"): ${pmList.join(", ")}"}
+{"type": "normal", "date": "이미지에 보이는 날짜 그대로 (없으면 빈 문자열)", "description": "가맹점명 또는 내역명", "amount": 정수(원 단위, 쉼표/원 기호 제외), "category": "다음 중 하나: ${categories.join(", ")}", "payment": "다음 중 하나 (보이지 않으면 \\"미지정\\"): ${pmList.join(", ")}", "asset": "이 거래에 사용된 카드/계좌/은행 이름 (이미지에 카드명, 은행명, 계좌 별칭 등이 보이면 사용자의 등록된 자산 이름 목록 중 가장 가까운 것으로 적고, 어떤 자산인지 전혀 알 수 없으면 빈 문자열)"}
 
 계좌/자산 간 이체 (사용자 본인 계좌끼리 돈이 옮겨간 경우 — 예: "적금 자동이체", "OO계좌로 이체", "본인 명의 계좌 이체" 등):
 {"type": "transfer", "date": "이미지에 보이는 날짜 그대로 (없으면 빈 문자열)", "description": "이체 내역명 (없으면 빈 문자열)", "amount": 정수(이체 금액, 항상 양수), "fromAsset": "보내는 계좌/자산 이름", "toAsset": "받는 계좌/자산 이름"}
@@ -49,6 +49,7 @@ export default async function handler(req, res) {
 - 이체(transfer)로 볼 수 있는 근거가 이미지에 명확히 없으면 절대 transfer로 분류하지 말고 일반(normal) 거래로 처리해. 확실하지 않으면 normal.
 - category는 반드시 주어진 목록 중 가장 알맞은 것 하나를 그대로 적어. 애매하면 "미분류".
 - payment는 이미지에 카드명/결제수단이 보이면 주어진 목록 중 가장 가까운 것으로, 안 보이면 "미지정"으로.
+- asset은 이미지에 사용된 카드/계좌/은행 이름이 텍스트로 보일 때만 채우고, 확실하지 않으면 빈 문자열로 비워 둬. 절대 추측하지 마.
 - 텍스트를 읽을 수 없는 이미지면 빈 배열 []을 출력해.${hintsText}${assetHintsText}`;
 
   const model = "gemini-3.1-flash-lite";
