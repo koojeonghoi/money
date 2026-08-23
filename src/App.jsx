@@ -826,6 +826,7 @@ export default function App() {
           const remembered = recallCategory(r.description);
           const matchedCat = remembered ? categories.find((c) => c.id === remembered) : findCategoryByName(r.category);
           const matchedPm = findPaymentMethodByName(r.payment);
+          const matchedAsset = resolveAsset(r.asset);
           newTx.push({
             id: uid(),
             date: normalizedDate,
@@ -833,7 +834,7 @@ export default function App() {
             amount: Number(r.amount) || 0,
             categoryId: matchedCat ? matchedCat.id : uncategorized,
             paymentMethodId: matchedPm ? matchedPm.id : unassignedPm,
-            assetId: "",
+            assetId: matchedAsset ? matchedAsset.id : "",
             createdAt: importedAt
           });
         });
