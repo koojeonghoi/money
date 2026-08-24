@@ -2009,7 +2009,7 @@ export default function App() {
                             <input
                               type="date"
                               value={tr.date}
-                              onChange={(e) => updateTransfer(tr.id, { date: e.target.value })}
+                              onChange={(e) => { if (e.target.value) updateTransfer(tr.id, { date: e.target.value }); }}
                               className="tabular bg-transparent outline-none text-xs flex-shrink-0"
                               style={{ color: "#5A6478" }}
                             />
@@ -2117,7 +2117,7 @@ export default function App() {
                           <input
                             type="date"
                             value={t.date}
-                            onChange={(e) => updateTx(t.id, { date: e.target.value })}
+                            onChange={(e) => { if (e.target.value) updateTx(t.id, { date: e.target.value }); }}
                             className="tabular bg-transparent outline-none text-xs flex-shrink-0"
                             style={{ color: "#5A6478" }}
                           />
