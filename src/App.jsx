@@ -517,6 +517,25 @@ export default function App() {
   const [typeFilter, setTypeFilter] = useState("all"); // all | expense | income
   const [paydayDom, setPaydayDom] = useState(25);
   const [periodOffset, setPeriodOffset] = useState(0); // 0 = current pay-period, -1 = previous, +1 = next
+  // 급여주기 계산은 매번 "지금 이 순간"의 실제 날짜를 기준으로 다시 계산되지만, 앱을 계속 켜놓은 채로
+  // 자정(또는 급여일)을 넘기면 리렌더링을 유발할 상태 변화가 없어서 화면이 갱신 안 될 수 있다.
+  // 화면이 다시 보일 때(포그라운드 복귀)와 주기적으로 오늘 날짜를 확인해서, 날짜가 바뀌었으면
+  // 강제로 리렌더링을 유발해 급여주기가 자동으로 새 기간으로 넘어가게 한다.
+  const [todayKey, setTodayKey] = useState(() => todayStr());
+  useEffect(() => {
+    const check = () => setTodayKey((prev) => {
+      const t = todayStr();
+      return prev !== t ? t : prev;
+    });
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    const interval = setInterval(check, 60 * 1000);
+    return () => {
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+      clearInterval(interval);
+    };
+  }, []);
 
   const [manualDate, setManualDate] = useState(todayStr());
   const [manualDesc, setManualDesc] = useState("");
@@ -1201,23 +1220,39 @@ export default function App() {
   };
 
   // ---- derived summaries ----
-  const payPeriod = useMemo(() => getPayPeriodByOffset(paydayDom, periodOffset), [paydayDom, periodOffset]);
+  const payPeriod = useMemo(() => getPayPeriodByOffset(paydayDom, periodOffset), [paydayDom, periodOffset, todayKey]);
+  // 기간 끝나는 날 하루 전체(자정 직전까지)를 포함시키기 위한 값 — payPeriod.end는 자정(00:00) 기준이라
+  // createdAt(실제 시각이 찍힌 값)과 비교할 때는 그날 끝까지 포함되도록 하루를 꽉 채워줘야 한다.
+  const payPeriodEndOfDay = useMemo(() => {
+    const d = new Date(payPeriod.end);
+    d.setHours(23, 59, 59, 999);
+    return d;
+  }, [payPeriod]);
 
   const periodTransactions = useMemo(() => {
     return transactions.filter((t) => {
       const d = parseTxDate(t.date, payPeriod.start, payPeriod.end);
-      if (!d) return true; // don't hide entries we can't confidently date
-      return d >= payPeriod.start && d <= payPeriod.end;
+      if (d) return d >= payPeriod.start && d <= payPeriod.end;
+      // 날짜가 비어 있거나 못 읽는 항목은, 실제로 입력한 시점(createdAt) 기준으로 이 기간에 속하는지 판단한다.
+      if (t.createdAt) {
+        const c = new Date(t.createdAt);
+        return c >= payPeriod.start && c <= payPeriodEndOfDay;
+      }
+      return true; // 그것마저 없으면 안전하게 계속 보여준다(숨기지 않음)
     });
-  }, [transactions, payPeriod]);
+  }, [transactions, payPeriod, payPeriodEndOfDay]);
 
   const periodTransfers = useMemo(() => {
     return transfers.filter((tr) => {
       const d = parseTxDate(tr.date, payPeriod.start, payPeriod.end);
-      if (!d) return true;
-      return d >= payPeriod.start && d <= payPeriod.end;
+      if (d) return d >= payPeriod.start && d <= payPeriod.end;
+      if (tr.createdAt) {
+        const c = new Date(tr.createdAt);
+        return c >= payPeriod.start && c <= payPeriodEndOfDay;
+      }
+      return true;
     });
-  }, [transfers, payPeriod]);
+  }, [transfers, payPeriod, payPeriodEndOfDay]);
 
   const totalsByCategory = useMemo(() => {
     return categories
