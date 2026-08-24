@@ -251,10 +251,22 @@ function parseTxDate(raw, periodStart, periodEnd) {
   let m = cleaned.match(/(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
   if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 
+  // 영수증에 흔한 "26.08.24"(2자리 연도.월.일) 형식 — 이걸 못 잡으면 아래의 "월.일" 패턴이
+  // 앞의 두 자리(예: "26")를 26월로 잘못 해석해서 완전히 엉뚱한 날짜로 튕겨나간다.
+  m = cleaned.match(/(\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})/);
+  if (m) {
+    const month = Number(m[2]) - 1;
+    const day = Number(m[3]);
+    if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
+      return new Date(2000 + Number(m[1]), month, day);
+    }
+  }
+
   m = cleaned.match(/(\d{1,2})[.\/월]\s*(\d{1,2})/);
   if (m) {
     const month = Number(m[1]) - 1;
     const day = Number(m[2]);
+    if (month < 0 || month > 11 || day < 1 || day > 31) return null; // "26.08" 같은 오인식 방지
     if (periodStart && periodStart.getMonth() === month) return new Date(periodStart.getFullYear(), month, day);
     if (periodEnd && periodEnd.getMonth() === month) return new Date(periodEnd.getFullYear(), month, day);
     return periodEnd ? new Date(periodEnd.getFullYear(), month, day) : new Date(new Date().getFullYear(), month, day);
@@ -263,8 +275,17 @@ function parseTxDate(raw, periodStart, periodEnd) {
   m = cleaned.match(/^(\d{1,2})\s*일/);
   if (m) {
     const day = Number(m[1]);
-    if (periodStart && day >= periodStart.getDate()) return new Date(periodStart.getFullYear(), periodStart.getMonth(), day);
-    if (periodEnd) return new Date(periodEnd.getFullYear(), periodEnd.getMonth(), day);
+    // "일"만 있는 날짜(예: "24일")는 영수증/명세서에서 온 것이라 항상 이미 지나간 지출이다.
+    // 급여주기가 아니라 실제 오늘 날짜를 기준으로 판단한다: 오늘의 일(day)보다 크면 아직 이번 달에
+    // 오지 않은 날짜라는 뜻이므로 지난달로, 아니면 이번 달로 본다. (예: 오늘 8/25에 "24일"이면 8/24)
+    const now = new Date();
+    if (day > now.getDate()) {
+      const prevMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+      const prevYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+      const lastDay = new Date(prevYear, prevMonth + 1, 0).getDate();
+      return new Date(prevYear, prevMonth, Math.min(day, lastDay));
+    }
+    return new Date(now.getFullYear(), now.getMonth(), day);
   }
 
   return null;
@@ -807,7 +828,12 @@ export default function App() {
         const currentPeriod = getPayPeriodByOffset(paydayDom, periodOffset);
         const normalizeRowDate = (rawDate) => {
           const parsed = parseTxDate(rawDate, currentPeriod.start, currentPeriod.end);
-          return parsed ? dateToYmd(parsed) : todayStr();
+          if (!parsed) return todayStr();
+          // 날짜 인식이 잘못돼서 터무니없이 먼 과거/미래로 튀면(예: 연도 오인식), 조용히 사라져 보이는 것보다
+          // 오늘 날짜로 남겨서 최소한 눈에 보이게 한다.
+          const yearsOff = Math.abs(parsed.getFullYear() - new Date().getFullYear());
+          if (yearsOff > 1) return todayStr();
+          return dateToYmd(parsed);
         };
 
         rows.forEach((r) => {
