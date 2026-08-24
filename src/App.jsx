@@ -1119,6 +1119,20 @@ export default function App() {
   };
 
   // ---- transfer CRUD (계좌 간 이체: 보내는 자산은 차감, 받는 자산은 증액) ----
+  const [dateNotice, setDateNotice] = useState(null); // { message, offsetDelta } — 방금 입력한 항목이 지금 보고 있는 급여주기가 아닌 다른 기간에 저장됐을 때 안내
+  const notifyIfOutsidePeriod = (dateStr) => {
+    const d = parseTxDate(dateStr, payPeriod.start, payPeriod.end);
+    if (!d) return;
+    if (d >= payPeriod.start && d <= payPeriod.end) return;
+    const targetPeriod = getPayPeriodForDate(d, paydayDom);
+    const monthsDelta =
+      (targetPeriod.start.getFullYear() - payPeriod.start.getFullYear()) * 12 +
+      (targetPeriod.start.getMonth() - payPeriod.start.getMonth());
+    setDateNotice({
+      message: `방금 입력한 내역은 ${formatPeriodDate(targetPeriod.start)} ~ ${formatPeriodDate(targetPeriod.end)} 기간에 저장됐어요.`,
+      offsetDelta: monthsDelta
+    });
+  };
   const addTransfer = (opts) => {
     const date = opts?.date ?? transferDate;
     const fromId = opts?.fromAssetId ?? transferFromId;
@@ -1137,6 +1151,7 @@ export default function App() {
       createdAt: Date.now()
     };
     setTransfers((prev) => [newTransfer, ...prev]);
+    notifyIfOutsidePeriod(newTransfer.date);
     if (!opts) {
       setTransferAmount("");
       setTransferMemo("");
@@ -1213,6 +1228,7 @@ export default function App() {
     };
     setTransactions((prev) => [newTx, ...prev]);
     rememberCategory(newTx.description, newTx.categoryId);
+    notifyIfOutsidePeriod(newTx.date);
     setManualDesc("");
     setManualAmount("");
     setManualIsIncome(false);
@@ -1692,6 +1708,23 @@ export default function App() {
             {/* Manual add form */}
             <div className="rounded-2xl p-4 flex flex-col gap-2.5" style={card}>
               <p className="text-sm font-semibold" style={{ color: "#93A0B8" }}>직접 추가</p>
+              {dateNotice && (
+                <div className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs" style={{ background: "rgba(201,162,39,0.12)", color: "#C9A227" }}>
+                  <span>{dateNotice.message}</span>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => {
+                        setPeriodOffset((o) => o + dateNotice.offsetDelta);
+                        setDateNotice(null);
+                      }}
+                      className="underline font-semibold"
+                    >
+                      그 기간 보기
+                    </button>
+                    <button onClick={() => setDateNotice(null)} style={{ color: "#93A0B8" }}>✕</button>
+                  </div>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2">
                 <input
                   type="date"
