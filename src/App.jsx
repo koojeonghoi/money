@@ -1423,8 +1423,13 @@ export default function App() {
         input, select { color-scheme: dark; }
       `}</style>
 
+      {/* 홈 화면에 추가해서 쓸 때(standalone PWA), iOS 상태 표시줄이 페이지 위에 투명하게 겹쳐지면서
+          스크롤된 내용이 그 뒤로 비쳐 보이는 문제가 있었다 — 상태 표시줄 높이만큼 배경색으로 항상
+          가려주는 얇은 바를 화면 맨 위에 고정해서 스크롤 위치와 상관없이 절대 겹치지 않게 한다. */}
+      <div className="fixed top-0 left-0 right-0 z-50" style={{ height: "env(safe-area-inset-top)", background: "#101B2D" }} />
+
       {/* Cover header */}
-      <header className="px-5 pt-8 pb-6 md:px-10" style={{ borderBottom: "1px solid #2A3B57" }}>
+      <header className="px-5 pt-8 pb-6 md:px-10" style={{ borderBottom: "1px solid #2A3B57", paddingTop: "calc(env(safe-area-inset-top) + 2rem)" }}>
         <div className="max-w-5xl mx-auto flex items-center gap-3">
           <PiggyBank size={28} style={{ color: "#C9A227" }} />
           <div>
@@ -1730,17 +1735,27 @@ export default function App() {
                   </select>
                 </div>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  <select value={manualCatId} onChange={(e) => setManualCatId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
-                    {categories.map((c) => (<option key={c.id} value={c.id}>{labelWithEmoji(c)}</option>))}
-                  </select>
-                  <select value={manualPmId} onChange={(e) => setManualPmId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
-                    {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
-                  </select>
-                  <button onClick={addManualTransaction} className="px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-1" style={{ background: "#C9A227", color: "#101B2D" }}>
-                    <Plus size={14} /> 추가
-                  </button>
-                </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>반영할 자산</span>
+                <select
+                  value={manualAssetTypeId}
+                  onChange={(e) => {
+                    setManualAssetTypeId(e.target.value);
+                    if (manualAssetId && assetMap[manualAssetId]?.assetTypeId !== e.target.value && e.target.value) {
+                      setManualAssetId("");
+                    }
+                  }}
+                  className="rounded-lg px-2 py-2 text-sm outline-none flex-shrink-0 w-[110px]"
+                  style={inputStyle}
+                >
+                  <option value="">종류 전체</option>
+                  {assetTypes.map((t) => (<option key={t.id} value={t.id}>{t.name}</option>))}
+                </select>
+                <select value={manualAssetId} onChange={(e) => setManualAssetId(e.target.value)} className="flex-1 min-w-[140px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                  <option value="">연결 안 함</option>
+                  {sortedAssets.filter((a) => !manualAssetTypeId || a.assetTypeId === manualAssetTypeId).map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
+                </select>
+              </div>
               )}
               {manualIsTransfer ? (
                 <div className="flex flex-wrap gap-2 items-center">
@@ -1767,27 +1782,17 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-xs flex-shrink-0" style={{ color: "#5A6478" }}>반영할 자산</span>
-                <select
-                  value={manualAssetTypeId}
-                  onChange={(e) => {
-                    setManualAssetTypeId(e.target.value);
-                    if (manualAssetId && assetMap[manualAssetId]?.assetTypeId !== e.target.value && e.target.value) {
-                      setManualAssetId("");
-                    }
-                  }}
-                  className="rounded-lg px-2 py-2 text-sm outline-none flex-shrink-0 w-[110px]"
-                  style={inputStyle}
-                >
-                  <option value="">종류 전체</option>
-                  {assetTypes.map((t) => (<option key={t.id} value={t.id}>{t.name}</option>))}
-                </select>
-                <select value={manualAssetId} onChange={(e) => setManualAssetId(e.target.value)} className="flex-1 min-w-[140px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
-                  <option value="">연결 안 함</option>
-                  {sortedAssets.filter((a) => !manualAssetTypeId || a.assetTypeId === manualAssetTypeId).map((a) => (<option key={a.id} value={a.id}>{a.name}</option>))}
-                </select>
-              </div>
+                <div className="flex flex-wrap gap-2">
+                  <select value={manualCatId} onChange={(e) => setManualCatId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                    {categories.map((c) => (<option key={c.id} value={c.id}>{labelWithEmoji(c)}</option>))}
+                  </select>
+                  <select value={manualPmId} onChange={(e) => setManualPmId(e.target.value)} className="flex-1 min-w-[120px] rounded-lg px-2 py-2 text-sm outline-none" style={inputStyle}>
+                    {paymentMethods.map((p) => (<option key={p.id} value={p.id}>{labelWithEmoji(p)}</option>))}
+                  </select>
+                  <button onClick={addManualTransaction} className="px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-1" style={{ background: "#C9A227", color: "#101B2D" }}>
+                    <Plus size={14} /> 추가
+                  </button>
+                </div>
               )}
               {manualIsTransfer && manualTransferFromId && manualTransferFromId === manualTransferToId && (
                 <p className="text-xs" style={{ color: "#B5533B" }}>보내는 자산과 받는 자산은 다르게 선택해 주세요.</p>
