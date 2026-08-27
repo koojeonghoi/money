@@ -576,6 +576,7 @@ export default function App() {
   const [transferToId, setTransferToId] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
   const [transferMemo, setTransferMemo] = useState("");
+  const [transferIsSaving, setTransferIsSaving] = useState(false);
 
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState("");
@@ -1165,6 +1166,7 @@ export default function App() {
     const toId = opts?.toAssetId ?? transferToId;
     const amountRaw = opts?.amount ?? transferAmount;
     const memo = opts?.memo ?? transferMemo;
+    const isSaving = opts?.isSaving ?? transferIsSaving;
     const absAmount = Number(String(amountRaw).replace(/[^0-9]/g, "")) || 0;
     if (absAmount === 0 || !fromId || !toId || fromId === toId) return false;
     const newTransfer = {
@@ -1174,6 +1176,7 @@ export default function App() {
       toAssetId: toId,
       amount: absAmount,
       memo: (memo || "").trim(),
+      isSaving: !!isSaving,
       createdAt: Date.now()
     };
     setTransfers((prev) => [newTransfer, ...prev]);
@@ -1181,6 +1184,7 @@ export default function App() {
     if (!opts) {
       setTransferAmount("");
       setTransferMemo("");
+      setTransferIsSaving(false);
       setTransferDate(todayStr());
     }
     return true;
@@ -1310,9 +1314,12 @@ export default function App() {
       const raw = categories
         .filter((c) => c.type === type)
         .reduce((sum, c) => sum + periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0), 0);
-      return { type, label: TYPE_LABEL[type], total: type === "income" || type === "saving" ? Math.abs(raw) : raw };
+      // "저축으로 반영" 체크된 계좌 이체는 지출/수입 카테고리가 없으므로 저축 합계에 별도로 더해준다.
+      const savingTransferSum =
+        type === "saving" ? periodTransfers.filter((tr) => tr.isSaving).reduce((s, tr) => s + Math.abs(Number(tr.amount || 0)), 0) : 0;
+      return { type, label: TYPE_LABEL[type], total: (type === "income" || type === "saving" ? Math.abs(raw) : raw) + savingTransferSum };
     });
-  }, [categories, periodTransactions]);
+  }, [categories, periodTransactions, periodTransfers]);
 
   // ---- asset balances: 자산의 "기준 금액"에 그 자산으로 연결된 수입/지출 거래 + 계좌 이체 + 잔액 업데이트(이미지 등)를 시간순으로 누적 반영한 실제 잔액 ----
   // 거래 amount는 지출이면 양수, 입금이면 음수이므로 자산 잔액에는 -amount 만큼 더한다.
@@ -1468,25 +1475,30 @@ export default function App() {
       t.amount < 0; // income
     return matchesCategory && matchesType;
   });
-  const showTransfersInLedger = selectedCategoryIds.length === 0 && (typeFilter === "all" || typeFilter === "transfer");
+  const showTransfersInLedger = selectedCategoryIds.length === 0 && (typeFilter === "all" || typeFilter === "transfer" || typeFilter === "saving");
+  const ledgerTransfers = typeFilter === "saving" ? periodTransfers.filter((tr) => tr.isSaving) : periodTransfers;
   const ledgerItems = useMemo(() => {
     const txItems = filteredTransactions.map((t) => ({ kind: "tx", key: t.id, date: t.date, createdAt: t.createdAt || 0, tx: t }));
-    const trItems = showTransfersInLedger ? periodTransfers.map((tr) => ({ kind: "transfer", key: tr.id, date: tr.date, createdAt: tr.createdAt || 0, tr })) : [];
+    const trItems = showTransfersInLedger ? ledgerTransfers.map((tr) => ({ kind: "transfer", key: tr.id, date: tr.date, createdAt: tr.createdAt || 0, tr })) : [];
     // 최근에 추가/수정한 항목이 위로 오도록 정렬한다 (createdAt이 없는 옛 데이터는 날짜순으로 폴백).
     return [...txItems, ...trItems].sort((a, b) => {
       if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
       return (b.date || "").localeCompare(a.date || "");
     });
-  }, [filteredTransactions, periodTransfers, showTransfersInLedger]);
+  }, [filteredTransactions, ledgerTransfers, showTransfersInLedger]);
   const filteredTotal = filteredTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const filteredTransferTotal = periodTransfers.reduce((s, tr) => s + Math.abs(Number(tr.amount || 0)), 0);
+  const filteredSavingTransferTotal = periodTransfers.filter((tr) => tr.isSaving).reduce((s, tr) => s + Math.abs(Number(tr.amount || 0)), 0);
   const filteredTotalLabel =
     typeFilter === "transfer" ? "이체 합계" :
     typeFilter === "income" ? "입금 합계" :
     typeFilter === "saving" ? "저축 합계" :
     typeFilter === "expense" ? "지출 합계" :
     filteredTotal >= 0 ? "지출 합계" : "순수입";
-  const filteredTotalAbs = typeFilter === "transfer" ? filteredTransferTotal : Math.abs(filteredTotal);
+  const filteredTotalAbs =
+    typeFilter === "transfer" ? filteredTransferTotal :
+    typeFilter === "saving" ? Math.abs(filteredTotal) + filteredSavingTransferTotal :
+    Math.abs(filteredTotal);
 
   const card = { background: "#16233A", border: "1px solid #2A3B57" };
   const inputStyle = { background: "#101B2D", border: "1px solid #2A3B57", color: "#EDE6D3" };
@@ -1992,6 +2004,17 @@ export default function App() {
                               style={{ background: "rgba(92,158,255,0.15)", color: "#5C9EFF" }}
                             >
                               이체
+                            </button>
+                            <button
+                              onClick={() => updateTransfer(tr.id, { isSaving: !tr.isSaving })}
+                              title="저축으로 반영 전환"
+                              className="text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0"
+                              style={{
+                                background: tr.isSaving ? "rgba(78,143,114,0.25)" : "rgba(90,100,120,0.15)",
+                                color: tr.isSaving ? "#4E8F72" : "#5A6478"
+                              }}
+                            >
+                              저축{tr.isSaving ? " ✓" : ""}
                             </button>
                             <input
                               type="text"
@@ -2525,6 +2548,15 @@ export default function App() {
                   })}
                 </select>
               </div>
+              <label className="flex items-center gap-1.5 text-xs select-none" style={{ color: transferIsSaving ? "#4E8F72" : "#93A0B8" }}>
+                <input
+                  type="checkbox"
+                  checked={transferIsSaving}
+                  onChange={(e) => setTransferIsSaving(e.target.checked)}
+                  className="accent-current"
+                />
+                저축으로 반영 (적금 등으로 들어가는 이체)
+              </label>
               <div className="flex flex-wrap gap-2">
                 <input
                   type="text"
@@ -2551,8 +2583,11 @@ export default function App() {
                   {transfers.slice(0, 8).map((tr) => (
                     <div key={tr.id} className="flex items-center justify-between px-3 py-2 text-xs" style={{ borderBottom: "1px solid #1e293b" }}>
                       <div className="min-w-0">
-                        <p className="truncate" style={{ color: "#EDE6D3" }}>
+                        <p className="truncate flex items-center gap-1" style={{ color: "#EDE6D3" }}>
                           {assetMap[tr.fromAssetId]?.name || "삭제된 자산"} → {assetMap[tr.toAssetId]?.name || "삭제된 자산"}
+                          {tr.isSaving && (
+                            <span className="text-[10px] font-bold px-1 py-0.5 rounded flex-shrink-0" style={{ background: "rgba(78,143,114,0.18)", color: "#4E8F72" }}>저축</span>
+                          )}
                         </p>
                         <p style={{ color: "#5A6478" }}>{tr.date}{tr.memo ? ` · ${tr.memo}` : ""}</p>
                       </div>
