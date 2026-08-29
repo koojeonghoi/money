@@ -1302,13 +1302,21 @@ export default function App() {
   }, [transfers, payPeriod, payPeriodEndOfDay]);
 
   const totalsByCategory = useMemo(() => {
-    return categories
+    const base = categories
       .map((c) => {
         const raw = periodTransactions.filter((t) => t.categoryId === c.id).reduce((s, t) => s + Number(t.amount || 0), 0);
         return { ...c, total: c.type === "income" ? Math.abs(raw) : c.type === "saving" ? Math.abs(raw) : raw };
       })
       .filter((c) => c.total !== 0);
-  }, [categories, periodTransactions]);
+
+    // "저축으로 반영" 체크된 계좌 이체는 카테고리가 없어 위 계산에서 빠지므로,
+    // 저축 카드를 펼쳤을 때도 보이도록 가상 항목으로 더해준다.
+    const savingTransferSum = periodTransfers.filter((tr) => tr.isSaving).reduce((s, tr) => s + Math.abs(Number(tr.amount || 0)), 0);
+    if (savingTransferSum > 0) {
+      base.push({ id: "__saving-transfer__", name: "계좌 이체 (저축 반영)", emoji: "🔁", color: "#4E8F72", type: "saving", total: savingTransferSum });
+    }
+    return base;
+  }, [categories, periodTransactions, periodTransfers]);
 
   const totalsByType = useMemo(() => {
     return TYPE_ORDER.map((type) => {
