@@ -529,6 +529,7 @@ export default function App() {
   const [expandedTypeCard, setExpandedTypeCard] = useState(null); // "fixed" | "variable" | "saving" | null
   const [selectedAssetIds, setSelectedAssetIds] = useState([]);
   const [assetSearch, setAssetSearch] = useState("");
+  const [assetTypeFilter, setAssetTypeFilter] = useState(null); // null = 전체, 아니면 특정 assetTypeId만 표시
 
   const [editingCatId, setEditingCatId] = useState(null);
   const [editingPmId, setEditingPmId] = useState(null);
@@ -1431,8 +1432,16 @@ export default function App() {
 
   const sortedFilteredAssets = useMemo(() => {
     const q = assetSearch.trim().toLowerCase();
-    return sortedAssets.filter((a) => !q || a.name.toLowerCase().includes(q));
-  }, [sortedAssets, assetSearch]);
+    return sortedAssets.filter((a) => (!q || a.name.toLowerCase().includes(q)) && (!assetTypeFilter || a.assetTypeId === assetTypeFilter));
+  }, [sortedAssets, assetSearch, assetTypeFilter]);
+
+  // 카테고리(자산 종류) 필터가 걸려 있을 때 그 종류에 속한 자산들의 합계 — 목록 상단에 보여주기 위함
+  const assetTypeFilterTotal = useMemo(() => {
+    if (!assetTypeFilter) return null;
+    return assets
+      .filter((a) => a.assetTypeId === assetTypeFilter)
+      .reduce((s, a) => s + (assetBalances[a.id] ?? Number(a.amount || 0)), 0);
+  }, [assets, assetTypeFilter, assetBalances]);
 
   const grandTotal = periodTransactions.reduce((s, t) => s + Number(t.amount || 0), 0);
   const totalAssets = assets.reduce((s, a) => s + (assetBalances[a.id] ?? Number(a.amount || 0)), 0);
@@ -2306,9 +2315,14 @@ export default function App() {
                 </div>
                 <div className="flex flex-wrap gap-2 mt-2 justify-center">
                   {assetPieData.map((a) => (
-                    <span key={a.id} className="text-xs px-2 py-1 rounded-full flex items-center gap-1" style={{ background: "#101B2D", color: a.color }}>
-                      <span className="w-2 h-2 rounded-full" style={{ background: a.color }} /> {a.name} {won(a.total)}
-                    </span>
+                    <button
+                      key={a.id}
+                      onClick={() => setAssetTypeFilter(assetTypeFilter === a.id ? null : a.id)}
+                      className="text-xs px-2 py-1 rounded-full flex items-center gap-1"
+                      style={{ background: assetTypeFilter === a.id ? a.color : "#101B2D", color: assetTypeFilter === a.id ? "#16233A" : a.color, border: assetTypeFilter === a.id ? "none" : `1px solid transparent` }}
+                    >
+                      <span className="w-2 h-2 rounded-full" style={{ background: assetTypeFilter === a.id ? "#16233A" : a.color }} /> {a.name} {won(a.total)}
+                    </button>
                   ))}
                 </div>
               </div>
@@ -2376,6 +2390,42 @@ export default function App() {
                   style={inputStyle}
                 />
               </div>
+              <div className="px-4 pb-2 flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => setAssetTypeFilter(null)}
+                  className="text-xs px-2.5 py-1 rounded-full font-semibold flex-shrink-0"
+                  style={{
+                    background: !assetTypeFilter ? "#C9A227" : "#101B2D",
+                    color: !assetTypeFilter ? "#16233A" : "#93A0B8",
+                    border: `1px solid ${!assetTypeFilter ? "#C9A227" : "#2A3B57"}`,
+                  }}
+                >
+                  전체
+                </button>
+                {assetTypes.map((t) => {
+                  const active = assetTypeFilter === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setAssetTypeFilter(active ? null : t.id)}
+                      className="text-xs px-2.5 py-1 rounded-full font-semibold flex-shrink-0"
+                      style={{
+                        background: active ? t.color : "#101B2D",
+                        color: active ? "#16233A" : t.color,
+                        border: `1px solid ${t.color}`,
+                      }}
+                    >
+                      {t.name}
+                    </button>
+                  );
+                })}
+              </div>
+              {assetTypeFilter && (
+                <div className="mx-4 mb-2 rounded-xl px-3 py-2 flex items-center justify-between" style={{ background: "#101B2D", border: `1px solid ${assetTypeMap[assetTypeFilter]?.color || "#2A3B57"}` }}>
+                  <span className="text-xs" style={{ color: "#93A0B8" }}>{assetTypeMap[assetTypeFilter]?.name} 합계</span>
+                  <span className="tabular text-sm font-bold" style={{ color: assetTypeMap[assetTypeFilter]?.color || "#C9A227" }}>{won(assetTypeFilterTotal)}</span>
+                </div>
+              )}
               {selectedAssetIds.length > 0 && (
                 <div className="mx-4 mb-2 rounded-xl px-3 py-2 flex items-center justify-between" style={{ background: "#101B2D", border: "1px solid #C9A227" }}>
                   <span className="text-xs" style={{ color: "#93A0B8" }}>{selectedAssetIds.length}개 선택됨</span>
