@@ -300,6 +300,19 @@ function labelWithEmoji(item) {
   return item?.emoji ? `${item.emoji} ${item.name}` : item?.name || "";
 }
 
+// iOS Safari에서 버튼을 탭해서 그 자리에 <input autoFocus>가 새로 렌더링되면,
+// 브라우저가 아직 레이아웃을 확정하기 전에 포커스가 걸려서 스크롤 위치를
+// 잘못 계산했다가(위로 확 튐) 레이아웃이 확정된 뒤 다시 보정 스크롤을
+// 하는 경우가 있었다(가끔 위로 튀었다가 다시 내려야 하는 문제).
+// autoFocus 대신 이 ref를 써서, 레이아웃이 페인트된 다음 프레임에 focus()를
+// 걸어주면 브라우저가 정확한 위치로 한 번만 스크롤한다.
+function autoFocusRef(el) {
+  if (!el) return;
+  requestAnimationFrame(() => {
+    if (document.activeElement !== el) el.focus();
+  });
+}
+
 function loadImageEl(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -2351,7 +2364,7 @@ export default function App() {
                     </div>
                     {editingAssetTypeId === at.id ? (
                       <input
-                        autoFocus
+                        ref={autoFocusRef}
                         value={at.name}
                         onChange={(e) => updateAssetType(at.id, { name: e.target.value })}
                         onBlur={() => setEditingAssetTypeId(null)}
@@ -2755,7 +2768,7 @@ export default function App() {
                     </div>
                     {editingCatId === cat.id ? (
                       <input
-                        autoFocus
+                        ref={autoFocusRef}
                         value={cat.name}
                         onChange={(e) => updateCategory(cat.id, { name: e.target.value })}
                         onBlur={() => setEditingCatId(null)}
@@ -2812,7 +2825,7 @@ export default function App() {
                     </div>
                     {editingPmId === pm.id ? (
                       <input
-                        autoFocus
+                        ref={autoFocusRef}
                         value={pm.name}
                         onChange={(e) => updatePaymentMethod(pm.id, { name: e.target.value })}
                         onBlur={() => setEditingPmId(null)}
