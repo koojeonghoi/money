@@ -1534,11 +1534,11 @@ export default function App() {
     typeFilter === "saving" ? Math.abs(filteredTotal) + filteredSavingTransferTotal :
     Math.abs(filteredTotal);
 
-  const card = { background: "#16233A", border: "1px solid #2A3B57" };
+  const card = { background: "#000000", border: "1px solid #555555" };
   const inputStyle = { background: "#101B2D", border: "1px solid #2A3B57", color: "#EDE6D3" };
 
   return (
-    <div className="min-h-screen w-full pb-24" style={{ background: "#101B2D", color: "#EDE6D3", fontFamily: "'Noto Sans KR','Malgun Gothic',sans-serif" }}>
+    <div className="min-h-screen w-full pb-24" style={{ background: "#000000", color: "#EDE6D3", fontFamily: "'Noto Sans KR','Malgun Gothic',sans-serif" }}>
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         .ledger-serif { font-family: 'Noto Serif KR','Nanum Myeongjo',serif; }
