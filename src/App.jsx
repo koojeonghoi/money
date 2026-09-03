@@ -851,7 +851,11 @@ export default function App() {
           return dateToYmd(parsed);
         };
 
-        rows.forEach((r) => {
+        rows.forEach((r, rowIndex) => {
+          // 일괄 등록된 행들이 createdAt(+date)까지 완전히 같으면 사용내역 목록 정렬에서 동점이 나고,
+          // 이후 "이체로 전환" 등으로 배열이 재구성될 때 동점 항목의 순서가 뒤바뀌어 보인다.
+          // 행마다 1ms씩 어긋나게 줘서 애초에 동점이 생기지 않게 한다(등록 순서=화면 순서 유지).
+          const rowCreatedAt = importedAt + rowIndex;
           const normalizedDate = normalizeRowDate(r.date);
           if (r.type === "transfer") {
             const fromAsset = resolveAsset(r.fromAsset);
@@ -864,7 +868,7 @@ export default function App() {
                 toAssetId: toAsset.id,
                 amount: Math.abs(Number(r.amount) || 0),
                 memo: r.description || "",
-                createdAt: importedAt
+                createdAt: rowCreatedAt
               });
               return;
             }
@@ -879,7 +883,7 @@ export default function App() {
               categoryId: uncategorized,
               paymentMethodId: transferPm,
               assetId: known ? known.id : "",
-              createdAt: importedAt
+              createdAt: rowCreatedAt
             });
             return;
           }
@@ -895,7 +899,7 @@ export default function App() {
             categoryId: matchedCat ? matchedCat.id : uncategorized,
             paymentMethodId: matchedPm ? matchedPm.id : unassignedPm,
             assetId: matchedAsset ? matchedAsset.id : "",
-            createdAt: importedAt
+            createdAt: rowCreatedAt
           });
         });
         if (newTx.length) setTransactions((prev) => [...newTx, ...prev]);
