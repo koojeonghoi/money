@@ -1701,7 +1701,7 @@ export default function App() {
               {pieData.length > 0 && (
                 <div className="rounded-2xl p-4" style={card}>
                   <p className="text-sm font-semibold mb-2" style={{ color: "#93A0B8" }}>카테고리별 지출</p>
-                  <div style={{ width: "100%", height: 220 }}>
+                  <div style={{ width: "100%", height: 220, touchAction: "pan-y" }}>
                     <ResponsiveContainer>
                       <PieChart>
                         <Pie data={pieData} dataKey="total" nameKey="name" innerRadius={50} outerRadius={85} paddingAngle={2}>
@@ -2328,7 +2328,7 @@ export default function App() {
             {assetPieData.length > 0 && (
               <div className="rounded-2xl p-4" style={card}>
                 <p className="text-sm font-semibold mb-2" style={{ color: "#93A0B8" }}>자산 구성</p>
-                <div style={{ width: "100%", height: 220 }}>
+                <div style={{ width: "100%", height: 220, touchAction: "pan-y" }}>
                   <ResponsiveContainer>
                     <PieChart>
                       <Pie data={assetPieData} dataKey="total" nameKey="name" innerRadius={50} outerRadius={85} paddingAngle={2}>
