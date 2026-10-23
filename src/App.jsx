@@ -1538,11 +1538,11 @@ export default function App() {
   const inputStyle = { background: "#101B2D", border: "1px solid #2A3B57", color: "#EDE6D3" };
 
   return (
-    <div className="min-h-screen w-full pb-24" style={{ background: "#000000", color: "#EDE6D3", fontFamily: "'Noto Sans KR','Malgun Gothic',sans-serif" }}>
+    <div className="min-h-screen w-full pb-24" style={{ background: "#000000", color: "#EDE6D3", fontFamily: "'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,system-ui,'Noto Sans KR','Malgun Gothic',sans-serif" }}>
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
-        .ledger-serif { font-family: 'Noto Serif KR','Nanum Myeongjo',serif; }
-        .tabular { font-variant-numeric: tabular-nums; font-family: 'Roboto Mono','SF Mono',monospace; }
+        .ledger-serif { font-family: 'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,system-ui,'Noto Sans KR','Malgun Gothic',sans-serif; }
+        .tabular { font-variant-numeric: tabular-nums; font-family: 'Pretendard Variable',Pretendard,-apple-system,BlinkMacSystemFont,system-ui,'Noto Sans KR','Malgun Gothic',sans-serif; }
         input, select { color-scheme: dark; }
       `}</style>
 
