@@ -1,3 +1,76 @@
+export const config = { maxDuration: 60 };
+
+// 앞에서부터 순서대로 시도. 한 모델이 과부하(503 등)면 다음 모델로 넘어간다.
+const MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"];
+const RETRY_STATUS = [429, 500, 503, 504];
+const ATTEMPTS_PER_MODEL = 2;
+const RETRY_DELAY_MS = 1000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function callGemini(apiKey, { image, mediaType, prompt, maxOutputTokens }) {
+  let lastStatus = 502;
+  let lastText = "";
+
+  for (const model of MODELS) {
+    for (let attempt = 1; attempt <= ATTEMPTS_PER_MODEL; attempt++) {
+      let response;
+      try {
+        response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey
+            },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { inline_data: { mime_type: mediaType || "image/png", data: image } },
+                    { text: prompt }
+                  ]
+                }
+              ],
+              generationConfig: {
+                response_mime_type: "application/json",
+                maxOutputTokens
+              }
+            })
+          }
+        );
+      } catch (e) {
+        lastText = e.message || "네트워크 오류";
+        if (attempt < ATTEMPTS_PER_MODEL) await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!text) return { status: 502, error: "응답에서 텍스트를 찾지 못했습니다." };
+        return { text };
+      }
+
+      lastStatus = response.status;
+      lastText = await response.text();
+
+      // 재시도해도 소용없는 오류(잘못된 키, 잘못된 요청 등)는 바로 중단
+      if (!RETRY_STATUS.includes(response.status)) {
+        return { status: 502, error: `Gemini API 오류: ${lastText}` };
+      }
+      if (attempt < ATTEMPTS_PER_MODEL) await sleep(RETRY_DELAY_MS);
+    }
+  }
+
+  console.error("Gemini 모든 모델 실패", lastStatus, lastText);
+  return {
+    status: 503,
+    error: "AI 서버가 혼잡해요. 잠시 후 다시 시도해 주세요."
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "허용되지 않는 요청입니다." });
@@ -52,42 +125,13 @@ export default async function handler(req, res) {
 - asset은 이미지에 사용된 카드/계좌/은행 이름이 텍스트로 보일 때만 채우고, 확실하지 않으면 빈 문자열로 비워 둬. 절대 추측하지 마.
 - 텍스트를 읽을 수 없는 이미지면 빈 배열 []을 출력해.${hintsText}${assetHintsText}`;
 
-  const model = "gemini-3.1-flash-lite";
-
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { inline_data: { mime_type: mediaType || "image/png", data: image } },
-                { text: prompt }
-              ]
-            }
-          ],
-          generationConfig: {
-            response_mime_type: "application/json",
-            maxOutputTokens: 8192
-          }
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const errText = await response.text();
-      res.status(502).json({ error: `Gemini API 오류: ${errText}` });
+    const result = await callGemini(apiKey, { image, mediaType, prompt, maxOutputTokens: 8192 });
+    if (result.error) {
+      res.status(result.status).json({ error: result.error });
       return;
     }
-
-    const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = result.text;
     if (!text) {
       res.status(502).json({ error: "응답에서 텍스트를 찾지 못했습니다." });
       return;
@@ -134,42 +178,13 @@ ${namesList.map((n) => `- ${n}`).join("\n")}
 - amount는 잔액/평가금액/평가액 등 "현재 총액"에 해당하는 숫자 하나. 매수금액, 수익률, 증감액 같은 부가 수치는 무시해.
 - 텍스트를 읽을 수 없는 이미지면 빈 배열 []을 출력해.`;
 
-  const model = "gemini-3.1-flash-lite";
-
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { inline_data: { mime_type: mediaType || "image/png", data: image } },
-                { text: prompt }
-              ]
-            }
-          ],
-          generationConfig: {
-            response_mime_type: "application/json",
-            maxOutputTokens: 4096
-          }
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const errText = await response.text();
-      res.status(502).json({ error: `Gemini API 오류: ${errText}` });
+    const result = await callGemini(apiKey, { image, mediaType, prompt, maxOutputTokens: 4096 });
+    if (result.error) {
+      res.status(result.status).json({ error: result.error });
       return;
     }
-
-    const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = result.text;
     if (!text) {
       res.status(502).json({ error: "응답에서 텍스트를 찾지 못했습니다." });
       return;
