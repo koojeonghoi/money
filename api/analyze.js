@@ -1,8 +1,10 @@
 export const config = { maxDuration: 60 };
 
 // 앞에서부터 순서대로 시도. 한 모델이 과부하(503 등)면 다음 모델로 넘어간다.
-const MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"];
+const MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"];
 const RETRY_STATUS = [429, 500, 503, 504];
+// 모델이 종료/미지원(404)이면 재시도 없이 바로 다음 모델로 넘어간다.
+const SKIP_MODEL_STATUS = [404];
 const ATTEMPTS_PER_MODEL = 2;
 const RETRY_DELAY_MS = 1000;
 
@@ -56,6 +58,8 @@ async function callGemini(apiKey, { image, mediaType, prompt, maxOutputTokens })
       lastStatus = response.status;
       lastText = await response.text();
 
+      if (SKIP_MODEL_STATUS.includes(response.status)) break;
+
       // 재시도해도 소용없는 오류(잘못된 키, 잘못된 요청 등)는 바로 중단
       if (!RETRY_STATUS.includes(response.status)) {
         return { status: 502, error: `Gemini API 오류: ${lastText}` };
@@ -67,7 +71,9 @@ async function callGemini(apiKey, { image, mediaType, prompt, maxOutputTokens })
   console.error("Gemini 모든 모델 실패", lastStatus, lastText);
   return {
     status: 503,
-    error: "AI 서버가 혼잡해요. 잠시 후 다시 시도해 주세요."
+    error: SKIP_MODEL_STATUS.includes(lastStatus)
+      ? "사용 가능한 AI 모델이 없어요. api/analyze.js의 MODELS 목록을 갱신해 주세요."
+      : "AI 서버가 혼잡해요. 잠시 후 다시 시도해 주세요."
   };
 }
 
