@@ -931,12 +931,13 @@ export default function App() {
   // (이미지로 잔액을 업데이트할 때 쓰임 — 그냥 updateAsset만 하면 변동내역에 안 보임)
   const applyAssetBalanceUpdate = useCallback((assetId, amount, date, note) => {
     const prevAmount = Number(assetMap[assetId]?.amount || 0);
-    const patch = { amount };
+    const now = Date.now();
+    const patch = { amount, baseUpdatedAt: now };
     if (date) patch.date = date;
     updateAsset(assetId, patch);
     setBalanceLogs((prev) => [
       ...prev,
-      { id: uid(), assetId, date: date || todayStr(), amount, prevAmount, note: note || "이미지로 잔액 업데이트", createdAt: Date.now() }
+      { id: uid(), assetId, date: date || todayStr(), amount, prevAmount, note: note || "이미지로 잔액 업데이트", createdAt: now }
     ]);
   }, [assetMap]);
 
@@ -1369,7 +1370,7 @@ export default function App() {
       pushLeg(tr.toAssetId, { id: `${tr.id}-in`, date: tr.date, createdAt: tr.createdAt, description: tr.memo || `${assetMap[tr.fromAssetId]?.name || "다른 자산"}에서 이체`, delta: Number(tr.amount || 0), kind: "transfer-in" });
     });
     balanceLogs.forEach((b) => {
-      pushLeg(b.assetId, { id: b.id, date: b.date, description: b.note || "잔액 업데이트", kind: "balance-set", targetAmount: Number(b.amount || 0) });
+      pushLeg(b.assetId, { id: b.id, date: b.date, createdAt: b.createdAt, description: b.note || "잔액 업데이트", kind: "balance-set", targetAmount: Number(b.amount || 0) });
     });
 
     const map = {};
