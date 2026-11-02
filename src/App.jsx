@@ -1436,6 +1436,10 @@ export default function App() {
           if (ts >= winner.ts) winner = { ts, amount: l.targetAmount };
         });
 
+      // 월 리셋 자산(신용카드 등): 입력 시각과 무관하게, 거래 "날짜"가 이번 달 1일 이전이면 집계에서 제외한다.
+      // (예: 11/2에 뒤늦게 입력한 10/31 사용분이 11월 사용액에 섞이지 않도록)
+      const monthStartTs = a.monthlyReset ? new Date(Number(monthKey.slice(0, 4)), Number(monthKey.slice(5, 7)) - 1, 1).getTime() : null;
+
       let running = winner.amount;
       map[a.id] = linked.map((leg) => {
         // 거래/이체/잔액업데이트 "자체의 날짜"(예: 어제 쓴 돈)가 아니라, 실제로 언제 "입력"했는지(createdAt)로
@@ -1444,7 +1448,8 @@ export default function App() {
         // (날짜만 못 읽는 옛날 데이터는 날짜를 기준시각으로 대신 사용)
         const legDay = parseTxDate(leg.date)?.getTime() ?? 0;
         const legTs = leg.createdAt ?? legDay;
-        const absorbed = legTs < winner.ts;
+        const beforeMonth = monthStartTs != null && leg.kind !== "balance-set" && legDay > 0 && legDay < monthStartTs;
+        const absorbed = legTs < winner.ts || beforeMonth;
         if (leg.kind === "balance-set") {
           if (absorbed) {
             return { ...leg, running, absorbed: true };
@@ -1462,7 +1467,7 @@ export default function App() {
       });
     });
     return map;
-  }, [assets, transactions, transfers, balanceLogs, assetMap, catMap]);
+  }, [assets, transactions, transfers, balanceLogs, assetMap, catMap, monthKey]);
 
   const assetBalances = useMemo(() => {
     const map = {};
