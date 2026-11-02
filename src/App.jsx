@@ -161,6 +161,12 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// 로컬(한국) 시간 기준 "YYYY-MM". todayStr()은 UTC 기준이라 1일 0~9시에 전날로 나오므로 월 리셋 판단엔 이걸 쓴다.
+function localMonthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
 // Korean public holidays (신정/설날/추석 연휴 등 포함, 대체공휴일 반영), 2024–2029.
 // Kept as a small static list instead of a holiday library, since that pulled in every country's
 // data and bloated the bundle ~4x for a feature that only ever needs KR.
@@ -571,6 +577,39 @@ export default function App() {
       clearInterval(interval);
     };
   }, []);
+
+  // ---- 매월 1일 자동 리셋: monthlyReset이 켜진 자산(신용카드 사용액 확인용)만 매월 1일 0원부터 다시 집계 ----
+  const [monthKey, setMonthKey] = useState(() => localMonthKey());
+  useEffect(() => {
+    const check = () => setMonthKey((prev) => {
+      const k = localMonthKey();
+      return prev !== k ? k : prev;
+    });
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    const interval = setInterval(check, 60 * 1000);
+    return () => {
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    setAssets((prev) => {
+      let changed = false;
+      const next = prev.map((a) => {
+        if (!a.monthlyReset || a.lastResetMonth === monthKey) return a;
+        changed = true;
+        const [y, m] = monthKey.split("-").map(Number);
+        // 기준 시각을 "그 달 1일 00:00"으로 고정 → 전월에 입력된 내역은 반영 제외, 1일 이후 입력분부터 집계.
+        // 고정값이라 기기 2대에서 동시에 리셋돼도 결과가 같다.
+        return { ...a, amount: 0, date: `${monthKey}-01`, baseUpdatedAt: new Date(y, m - 1, 1).getTime(), lastResetMonth: monthKey };
+      });
+      return changed ? next : prev;
+    });
+  }, [loaded, monthKey, assets]);
 
   const [manualDate, setManualDate] = useState(todayStr());
   const [manualDesc, setManualDesc] = useState("");
@@ -2532,6 +2571,15 @@ export default function App() {
                             style={{ color: "#5A6478" }}
                           />
                         </div>
+                        <label className="flex items-center gap-2 pl-6 text-xs cursor-pointer" style={{ color: a.monthlyReset ? "#C9A227" : "#5A6478" }}>
+                          <input
+                            type="checkbox"
+                            checked={!!a.monthlyReset}
+                            onChange={() => updateAsset(a.id, { monthlyReset: !a.monthlyReset, lastResetMonth: localMonthKey() })}
+                            style={{ accentColor: "#C9A227", width: 14, height: 14 }}
+                          />
+                          매월 1일 0원으로 자동 리셋
+                        </label>
                         {changed && !noticeDismissed && (
                           <div className="flex items-start justify-between gap-2 pl-6">
                             <p className="text-[11px]" style={{ color: "#5A6478" }}>
