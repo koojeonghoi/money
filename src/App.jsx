@@ -2575,7 +2575,7 @@ export default function App() {
                           <input
                             type="checkbox"
                             checked={!!a.monthlyReset}
-                            onChange={() => updateAsset(a.id, { monthlyReset: !a.monthlyReset, lastResetMonth: localMonthKey() })}
+                            onChange={() => updateAsset(a.id, { monthlyReset: !a.monthlyReset, lastResetMonth: undefined })}
                             style={{ accentColor: "#C9A227", width: 14, height: 14 }}
                           />
                           매월 1일 0원으로 자동 리셋
