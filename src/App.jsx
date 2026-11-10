@@ -157,8 +157,9 @@ function uid() {
   return crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+// 로컬(한국) 시간 기준 오늘. toISOString()은 UTC라 한국 시간 0~9시에 전날 날짜가 나온다.
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return dateToYmd(new Date());
 }
 
 // 로컬(한국) 시간 기준 "YYYY-MM". todayStr()은 UTC 기준이라 1일 0~9시에 전날로 나오므로 월 리셋 판단엔 이걸 쓴다.
@@ -268,7 +269,7 @@ function parseTxDate(raw, periodStart, periodEnd) {
     }
   }
 
-  m = cleaned.match(/(\d{1,2})[.\/월]\s*(\d{1,2})/);
+  m = cleaned.match(/(\d{1,2})[.\-\/월]\s*(\d{1,2})/);
   if (m) {
     const month = Number(m[1]) - 1;
     const day = Number(m[2]);
