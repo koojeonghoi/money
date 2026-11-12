@@ -10,6 +10,21 @@ const RETRY_DELAY_MS = 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 일반 거래의 부호는 모델이 적은 부호가 아니라 direction(돈이 나갔나/들어왔나)으로 코드에서 확정한다.
+// 앱마다 지출을 '-12,000원', 입금을 부호 없는 파란색으로 보여주는 등 표시 방식이 달라서,
+// 모델이 화면의 '-'를 그대로 옮겨 적으면 지출이 입금으로 뒤집히던 문제를 막기 위함.
+//   out(나감) → 양수(지출), in(들어옴) → 음수(입금). direction이 없으면 예전처럼 모델이 준 값 그대로.
+function applyDirection(row) {
+  if (!row || row.type === "transfer") return row;
+  const amount = Number(String(row.amount).replace(/[,\s원]/g, ""));
+  if (!Number.isFinite(amount)) return row;
+  const direction = String(row.direction || "").trim().toLowerCase();
+  const abs = Math.abs(amount);
+  if (direction === "out") return { ...row, amount: abs };
+  if (direction === "in") return { ...row, amount: -abs };
+  return row;
+}
+
 async function callGemini(apiKey, { image, mediaType, prompt, maxOutputTokens }) {
   let lastStatus = 502;
   let lastText = "";
@@ -52,7 +67,7 @@ async function callGemini(apiKey, { image, mediaType, prompt, maxOutputTokens })
         const data = await response.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!text) return { status: 502, error: "응답에서 텍스트를 찾지 못했습니다." };
-        return { text };
+        return { text, model };
       }
 
       lastStatus = response.status;
@@ -117,14 +132,15 @@ export default async function handler(req, res) {
 오직 아래 형식의 순수 JSON 배열만 출력해. 설명이나 다른 텍스트 없이 JSON 배열만.
 
 일반 지출/입금:
-{"type": "normal", "date": "이미지에 보이는 날짜 그대로 (없으면 빈 문자열)", "description": "가맹점명 또는 내역명", "amount": 정수(원 단위, 쉼표/원 기호 제외), "category": "다음 중 하나: ${categories.join(", ")}", "payment": "다음 중 하나 (보이지 않으면 \\"미지정\\"): ${pmList.join(", ")}", "asset": "이 거래에 사용된 카드/계좌/은행 이름 (이미지에 카드명, 은행명, 계좌 별칭 등이 보이면 사용자의 등록된 자산 이름 목록 중 가장 가까운 것으로 적고, 어떤 자산인지 전혀 알 수 없으면 빈 문자열)"}
+{"type": "normal", "date": "이미지에 보이는 날짜 그대로 (없으면 빈 문자열)", "description": "가맹점명 또는 내역명", "direction": "out" 또는 "in" (돈이 내 쪽에서 나갔으면 out, 들어왔으면 in), "amount": 정수(원 단위, 쉼표/원 기호/+- 부호 제외, 항상 양수), "category": "다음 중 하나: ${categories.join(", ")}", "payment": "다음 중 하나 (보이지 않으면 \\"미지정\\"): ${pmList.join(", ")}", "asset": "이 거래에 사용된 카드/계좌/은행 이름 (이미지에 카드명, 은행명, 계좌 별칭 등이 보이면 사용자의 등록된 자산 이름 목록 중 가장 가까운 것으로 적고, 어떤 자산인지 전혀 알 수 없으면 빈 문자열)"}
 
 계좌/자산 간 이체 (사용자 본인 계좌끼리 돈이 옮겨간 경우 — 예: "적금 자동이체", "OO계좌로 이체", "본인 명의 계좌 이체" 등):
 {"type": "transfer", "date": "이미지에 보이는 날짜 그대로 (없으면 빈 문자열)", "description": "이체 내역명 (없으면 빈 문자열)", "amount": 정수(이체 금액, 항상 양수), "fromAsset": "보내는 계좌/자산 이름", "toAsset": "받는 계좌/자산 이름"}
 
 규칙:
 - 이미지에 있는 모든 거래를 빠짐없이 배열에 포함해.
-- 일반 거래는 amount를 지출이면 양수, 환불/입금처럼 반대 방향이면 음수로.
+- 일반 거래의 direction은 돈이 내 쪽에서 나간 거래(카드 결제·승인, 출금, 자동납부, 송금해서 보낸 것)면 "out", 돈이 들어온 거래(입금, 환불, 받은 돈)면 "in"으로 적어. amount는 부호 없이 항상 양수로 적어.
+- 화면에 보이는 '-', '+' 부호나 금액 색(파란색/빨간색)은 앱마다 의미가 반대일 수 있으니 부호로 판단하지 말고, 무슨 거래인지(내역의 의미)로 out/in을 판단해. 예: 어떤 앱은 지출을 '-27,500원'으로, 받은 돈을 부호 없는 파란색 '10,000원'으로 보여줘. 이 경우 앞의 것은 "out", 뒤의 것은 "in"이야.
 - 이체(transfer)로 볼 수 있는 근거가 이미지에 명확히 없으면 절대 transfer로 분류하지 말고 일반(normal) 거래로 처리해. 확실하지 않으면 normal.
 - category는 반드시 주어진 목록 중 가장 알맞은 것 하나를 그대로 적어. 애매하면 "미분류".
 - payment는 이미지에 카드명/결제수단이 보이면 주어진 목록 중 가장 가까운 것으로, 안 보이면 "미지정"으로.
@@ -156,7 +172,9 @@ export default async function handler(req, res) {
       return;
     }
 
-    res.status(200).json({ transactions: parsed });
+    const transactions = parsed.map(applyDirection);
+    console.log("analyze ok:", result.model, `${transactions.length} rows`);
+    res.status(200).json({ transactions, model: result.model });
   } catch (e) {
     res.status(500).json({ error: e.message || "서버 오류가 발생했습니다." });
   }
